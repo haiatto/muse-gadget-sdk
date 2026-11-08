@@ -1283,6 +1283,24 @@ static void on_volume(lv_event_t *e)
     }
 }
 
+/* museStopWatch: the reading voice's level (components/muse_diy_stopwatch/sanotts). */
+extern int msw_tts_level(void) __attribute__((weak));
+extern void msw_tts_set_level(int percent) __attribute__((weak));
+extern const char *msw_tts_say(const char *text) __attribute__((weak));
+extern void msw_tts_stop(void) __attribute__((weak));
+static lv_obj_t *s_tts_sl, *s_tts_val;
+
+static void on_tts_level(lv_event_t *e)
+{
+    int v = lv_slider_get_value(s_tts_sl) * 10;
+    set_val(s_tts_val, "%d%%", v);
+    if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
+        msw_tts_set_level(v);
+        if (msw_tts_stop) msw_tts_stop();
+        if (msw_tts_say) msw_tts_say("この大きさで読みます。");
+    }
+}
+
 static void on_gain(lv_event_t *e)
 {
     int db = lv_slider_get_value(s_gain_sl) * 3;
@@ -1324,6 +1342,13 @@ static void build_sound_page(lv_obj_t *tile)
     if (muse_board->audio_init) {
         s_spk_sw = switch_row(list, "Speaker", muse_settings_speaker_on(), on_speaker_sw);
         s_vol_sl = slider(list, "Volume", 0, 100, muse_settings_volume(), &s_vol_val, on_volume);
+        if (msw_tts_level && msw_tts_set_level) {
+            /* museStopWatch: 50-300 % in steps of 10 */
+            s_tts_sl = slider(list, "Voice level", 5, 30, msw_tts_level() / 10, &s_tts_val, on_tts_level);
+            set_val(s_tts_val, "%d%%", msw_tts_level() / 10 * 10);
+            note(list, "本体の声（読み上げ）の大きさ。外で聞こえにくいときに上げます。大きくすると、割れないように"
+                       "大きいところを抑えるので、音が少し平たくなります。");
+        }
     }
     s_gain_sl = slider(list, "Mic gain", 0, MUSE_MIC_GAIN_MAX / 3, muse_settings_mic_gain() / 3, &s_gain_val, on_gain);
 

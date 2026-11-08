@@ -61,6 +61,12 @@ void msw_menu_open(const char *title)
         return;
     }
     atomic_store(&s_choice, MSW_MENU_NONE);
+    /* A new object is first laid out at (0, 0) and then centred; lvgl would
+     * join both places into one dirty area from the top-left corner and, with
+     * frame drawing, paint it black (the app's lvgl screen) over the frame.
+     * Build it unseen, then mark only the box's own place. */
+    lv_display_t *d = lv_display_get_default();
+    lv_display_enable_invalidation(d, false);
     s_box = lv_obj_create(lv_layer_top());
     lv_obj_remove_style_all(s_box);
     lv_obj_set_size(s_box, BOX_W, BOX_H);
@@ -82,6 +88,9 @@ void msw_menu_open(const char *title)
     lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 20);
     add_button(s_box, "つづける", 0x81c784, 64, MSW_MENU_GO_ON);
     add_button(s_box, "おわる", 0xef9a9a, 142, MSW_MENU_QUIT);
+    lv_obj_update_layout(s_box);
+    lv_display_enable_invalidation(d, true);
+    lv_obj_invalidate(s_box);
 }
 
 void msw_menu_close(void)

@@ -66,6 +66,8 @@ extern "C" {
 extern "C" const char *msw_tts_say(const char *text) __attribute__((weak));
 // museStopWatch: mini apps (components/muse_diy_stopwatch/miniapp); NULL when not linked in.
 extern "C" cJSON *msw_app_command(const char *command, const cJSON *params) __attribute__((weak));
+// museStopWatch: the whole-device guide, stopwatch.doc (components/muse_diy_stopwatch/ui/msw_doc.c).
+extern "C" const char *msw_doc_version(void) __attribute__((weak));
 
 using namespace musegadgets::noise::core;
 
@@ -1431,6 +1433,17 @@ static char *build_register_json(void) {
     add_register_metadata_string(&metadata, params, "network_ssid", wifi_ssid);
 
     cJSON *commands = cJSON_CreateObject();
+    if (msw_doc_version) {
+        /* museStopWatch: the version in the description tells Muse when to read it again. */
+        char doc_desc[640];
+        snprintf(doc_desc, sizeof(doc_desc),
+                 "Muse DIY StopWatch 総合ガイド（版 %s）。この時計のこと、ボタン、返事の字幕と読み上げ、"
+                 "各ツールの詳しい使い方と組み合わせ方、ユーザーへの案内、注意をまとめた日本語の"
+                 "Markdown（content）を返します。この版をまだ読んでいなければ、会話の最初に1回呼んで"
+                 "ください。同じ版を読んだことがあれば呼ばなくてよい。引数なし。",
+                 msw_doc_version());
+        add_command(commands, "stopwatch.doc", doc_desc, nullptr, nullptr);
+    }
     add_command(commands, "device.health",
                 "Report basic Link health, including battery level (percent), "
                 "voltage, and whether it is charging or on USB power; each is "

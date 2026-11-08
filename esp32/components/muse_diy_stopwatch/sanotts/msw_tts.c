@@ -42,6 +42,7 @@
 #include "g2p.h"
 #include "jdict.h"
 #include "msw_stack.h"
+#include "nvs.h"
 #include "muse_audio.h"
 #include "muse_settings.h"
 #include "muse_voice.h"
@@ -54,6 +55,7 @@
 #define IDS_CAP (2 * 512 + 3)       /* upstream SAAN_G2P_IDS_CAP */
 #define MAX_PULLS 256
 #define CHUNK_SAMPLES (SAAN_CHUNK * SAAN_HOP)
+#define TTS_GAIN 1.0f              /* see s_cfg.gain */
 #define TASK_STACK 12288            /* bench: about 7.7 KB used */
 
 static struct {
@@ -63,7 +65,8 @@ static struct {
     int core;   /* -1 = any */
     int rep;
     bool quiet;   /* speech plays silence of the same length (tests at night) */
-} s_cfg = { false, true, 4, 0, 1, false };
+    float gain;   /* speech level: the model's output times this (msw.tts.cfg gain=) */
+} s_cfg = { false, true, 4, 0, 1, false, TTS_GAIN };
 
 static const void *s_model_map, *s_dict_map;
 static size_t s_model_n, s_dict_n;
@@ -416,6 +419,72 @@ static bool rs_init(void)
     return s_rs_in && s_ring;
 }
 
+/* The loudest output of this text (before the limiter) and how many samples the limiter touched. */
+static float s_peak;
+static int s_clipped;
+
+/* --- voice level (Settings > Sound > Voice level, NVS msw/tts_level) -------------- */
+
+#define LEVEL_MIN 50
+#define LEVEL_MAX 300
+#define LEVEL_DEFAULT 100
+/* The codec's gain at volume 100 on this board, in dB: esp_codec_dev's curve tops at
+ * 0 dB and board_m5stack_stopwatch.c's hw_gain adds 3.6 + 6 dB (pa_gain -6). */
+#define CODEC_DB_AT_100 9.6f
+
+static int s_level = -1;    /* percent; -1 = not read yet */
+static float s_limit = 1;   /* this text's ceiling, so the codec's gain doesn't clip */
+
+int msw_tts_level(void)
+{
+    if (s_level < 0) {
+        s_level = LEVEL_DEFAULT;
+        nvs_handle_t h;
+        if (nvs_open("msw", NVS_READONLY, &h) == ESP_OK) {
+            uint16_t v;
+            if (nvs_get_u16(h, "tts_level", &v) == ESP_OK && v >= LEVEL_MIN && v <= LEVEL_MAX) {
+                s_level = v;
+            }
+            nvs_close(h);
+        }
+    }
+    return s_level;
+}
+
+void msw_tts_set_level(int percent)
+{
+    percent = percent < LEVEL_MIN ? LEVEL_MIN : percent > LEVEL_MAX ? LEVEL_MAX : percent;
+    s_level = percent;
+    nvs_handle_t h;
+    if (nvs_open("msw", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u16(h, "tts_level", (uint16_t)percent);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+/* The codec multiplies by 10^(dB/20) after us; past full scale it clips hard.
+ * Keep the samples under 1/that, bending the loud part smoothly instead. */
+static void limit_update(void)
+{
+    float db = -50.0f + 0.5f * muse_settings_volume() + CODEC_DB_AT_100;
+    float g = powf(10.0f, db / 20.0f);
+    s_limit = g > 1.0f ? 1.0f / g : 1.0f;
+}
+
+static float limit(float y)
+{
+    const float a = y < 0 ? -y : y;
+    const float knee = 0.6f * s_limit;
+    if (a <= knee) {
+        return y;
+    }
+    s_clipped++;
+    const float room = s_limit - knee;
+    const float out = knee + room * tanhf((a - knee) / room);
+    return y < 0 ? -out : out;
+}
+
 static void rs_reset(void)
 {
     /* Start with half a window of silence, so the first output is centred on sample 0. */
@@ -423,6 +492,9 @@ static void rs_reset(void)
     memset(s_rs_in, 0, s_rs_len * sizeof(float));
     s_rs_in0 = -(RS_T / 2 - 1);
     s_rs_out = 0;
+    s_peak = 0;
+    s_clipped = 0;
+    limit_update();
 }
 
 static bool ring_put(int16_t v)
@@ -467,7 +539,12 @@ static bool rs_run(bool flush)
         for (int j = 0; j < RS_T; j++) {
             y += h[j] * x[j];
         }
-        if (!ring_put(saan_f32_to_i16(y))) {
+        y *= s_cfg.gain * msw_tts_level() / 100.0f;
+        float a = y < 0 ? -y : y;
+        if (a > s_peak) {
+            s_peak = a;
+        }
+        if (!ring_put(saan_f32_to_i16(limit(y)))) {
             return false;
         }
         s_rs_out++;
@@ -639,9 +716,9 @@ static void say_task(void *arg)
             }
         }
     }
-    printf("@msw.say made %d parts in %.2f s: %lld samples in, %lld out at 16 kHz; %d characters left out, %s\n",
+    printf("@msw.say made %d parts in %.2f s: %lld samples in, %lld out at 16 kHz; %d characters left out, %s; peak %.3f (limit %.3f), limited %d\n",
            spoken, (esp_timer_get_time() - t0) / 1e6, (long long)(s_rs_in0 + s_rs_len), (long long)s_rs_out, dropped,
-           atomic_load(&s_say_stop) ? "stopped" : "ok");
+           atomic_load(&s_say_stop) ? "stopped" : "ok", s_peak, s_limit, s_clipped);
     work_free(&w);
     free(text);
     atomic_store(&s_say_active, false);
@@ -748,7 +825,8 @@ static const char *begin(const char *text, bool reply)
     if (!reply) {
         atomic_fetch_add(&s_says, 1);
     }
-    muse_voice_set_player(&s_player);
+    /* The player is set once at start-up (msw_tts_register): the mini apps wrap
+     * it to mix their sound in, and setting it again here unwrapped them. */
     if (!start_task(say_task, copy)) {
         free(copy);
         atomic_store(&s_say_active, false);
@@ -814,9 +892,9 @@ static const muse_reply_voice_t s_reply_voice = { rv_start, rv_read, rv_says, rv
 
 static void print_cfg(void)
 {
-    printf("@msw.tts cfg arena=%s model=%s prio=%d core=%s%d rep=%d quiet=%d (arena %u B)\n", s_cfg.arena_int ? "int" : "psram",
+    printf("@msw.tts cfg arena=%s model=%s prio=%d core=%s%d rep=%d quiet=%d gain=%.2f (arena %u B)\n", s_cfg.arena_int ? "int" : "psram",
            s_cfg.model_psram ? "psram" : "flash", s_cfg.prio, s_cfg.core < 0 ? "any" : "", s_cfg.core < 0 ? 0 : s_cfg.core,
-           s_cfg.rep, s_cfg.quiet, (unsigned)arena_bytes());
+           s_cfg.rep, s_cfg.quiet, s_cfg.gain, (unsigned)arena_bytes());
 }
 
 static void set_cfg(char *args)
@@ -837,6 +915,8 @@ static void set_cfg(char *args)
             s_cfg.core = !strcmp(v, "any") ? -1 : atoi(v);
         } else if (!strcmp(tok, "quiet")) {
             s_cfg.quiet = atoi(v) != 0;
+        } else if (!strcmp(tok, "gain")) {
+            s_cfg.gain = strtof(v, NULL);
         } else if (!strcmp(tok, "rep")) {
             s_cfg.rep = atoi(v) < 1 ? 1 : atoi(v);
         }
@@ -852,6 +932,7 @@ __attribute__((constructor)) static void msw_tts_register(void)
 {
     msw_console_add(msw_tts_console);
     muse_reply_voice_set(&s_reply_voice);   /* Muse's replies are spoken with this voice */
+    muse_voice_set_player(&s_player);       /* before the mini apps wrap it (msw_sound_init) */
 }
 
 bool msw_tts_console(const char *line)

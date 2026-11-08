@@ -17,6 +17,7 @@
 
 #include "cJSON.h"
 #include "esp_heap_caps.h"
+#include "esp_attr.h"
 #include "msw_app_priv.h"
 
 extern const char guide_md_start[] asm("_binary_guide_md_start");
@@ -90,7 +91,7 @@ static cJSON *page(const char *start, const char *end, const cJSON *params)
 
 static cJSON *list(void)
 {
-    static msw_app_info_t apps[MSW_APP_MAX_APPS];
+    static EXT_RAM_BSS_ATTR msw_app_info_t apps[MSW_APP_MAX_APPS];   /* 3 KB: PSRAM */
     int n = msw_app_list(apps, MSW_APP_MAX_APPS);
     cJSON *payload;
     cJSON *r = ok_payload(&payload);

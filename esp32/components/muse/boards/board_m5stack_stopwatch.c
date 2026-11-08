@@ -967,7 +967,9 @@ static esp_err_t audio_init(esp_codec_dev_handle_t *spk, esp_codec_dev_handle_t 
         .codec_mode = ESP_CODEC_DEV_WORK_MODE_BOTH,
         .pa_pin = SPK_PA_PIN,
         .use_mclk = true,
-        .hw_gain = { .pa_voltage = 5.0, .codec_dac_voltage = 3.3 },
+        /* museStopWatch: pa_gain -6 makes volume 100 6 dB louder than the factory demo
+         * (users found 100 too quiet; lower volumes still reach quiet). */
+        .hw_gain = { .pa_voltage = 5.0, .codec_dac_voltage = 3.3, .pa_gain = -6.0 },
     };
     const audio_codec_if_t *codec = es8311_codec_new(&s_es_cfg);
     ESP_RETURN_ON_FALSE(codec, ESP_FAIL, TAG, "ES8311 not responding");

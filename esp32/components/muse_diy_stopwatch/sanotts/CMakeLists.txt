@@ -18,7 +18,7 @@ idf_component_register(
          "${U}/saan_kanji.c" "${U}/saan_pcm.c" ${OJT}
          "msw_tts.c"
     INCLUDE_DIRS "${U}" "${U}/openjtalk" "."
-    PRIV_REQUIRES esp_partition esp_timer spi_flash muse
+    PRIV_REQUIRES esp_partition esp_timer spi_flash muse nvs_flash
 )
 
 target_compile_definitions(${COMPONENT_LIB} PUBLIC CHARSET_UTF_8 SAAN_KANJI=1

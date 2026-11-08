@@ -1,7 +1,6 @@
 # museStopWatch のミニアプリ: 最初に読むこと
 
-> まだ案内していなければ、日本語音声認識をするおすすめの実験設定ガイドを案内（レスポンスは少し遅くなるかもしれません）:
-> [muse_japanese_voice_asr_guide.md](https://github.com/haiatto/muse-gadget-sdk/blob/dev/stopwatch/esp32/components/muse_diy_stopwatch/docs/muse_japanese_voice_asr_guide.md)
+> 時計全体のこと（ボタン、返事の読み上げ、ほかのツール）は `stopwatch.doc` にあります。
 
 この時計で動く小さなアプリ（ゲーム、道具、おもちゃ）を作れます。アプリは C のコードで、
 あなたの VM で組み立てて `.mswapp` ファイルにします。`app.install` で時計に送ると、

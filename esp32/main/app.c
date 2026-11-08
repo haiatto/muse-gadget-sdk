@@ -1947,6 +1947,8 @@ extern void msw_tts_stop(void) __attribute__((weak));
 /* museStopWatch: mini apps (components/muse_diy_stopwatch/miniapp); NULL when not linked in. */
 extern cJSON *msw_app_command(const char *command, const cJSON *params) __attribute__((weak));
 extern cJSON *msw_app_install_json(const uint8_t *data, size_t n, bool run) __attribute__((weak));
+/* museStopWatch: the whole-device guide (components/muse_diy_stopwatch/ui/msw_doc.c). */
+extern cJSON *msw_doc_command(const char *command, const cJSON *params) __attribute__((weak));
 
 #if CONFIG_HOMEHUB_DISPLAY_COMMANDS
 typedef struct {
@@ -2060,6 +2062,10 @@ static cJSON *on_ws_command(
         return async;
     }
 #endif
+    if (msw_doc_command && strcmp(command, "stopwatch.doc") == 0) {
+        cJSON *r = msw_doc_command(command, params);
+        if (r) return r;
+    }
     if (msw_app_command && strncmp(command, "app.", 4) == 0) {
         cJSON *r = msw_app_command(command, params);
         if (r) return r;
@@ -2834,7 +2840,13 @@ void app_run(void) {
     wifi_mgr_init();
     heap_snapshot("after wifi_mgr_init");
 
+#if CONFIG_MUSE_BOARD_M5STACK_STOPWATCH
+    /* museStopWatch: the name the Muse app lists the gadget by (display_name
+     * in link.register). The BLE name stays MuseGadget-XXXXXX for pairing. */
+    noise_ctrl_init(identity_node_id(), "Muse DIY StopWatch", on_ws_control_status);
+#else
     noise_ctrl_init(identity_node_id(), identity_ble_name(), on_ws_control_status);
+#endif
     noise_ctrl_set_command_cb(on_ws_command);
     noise_ctrl_set_agent_name_cb(led_status_set_title);
     heap_snapshot("after noise_ctrl_init");

@@ -17,6 +17,7 @@
 #include "lvgl.h"
 #include "muse_board.h"
 #include "msw_text.h"
+#include "esp_attr.h"
 #include "msw_app_priv.h"
 
 #define COLS 3
@@ -191,7 +192,7 @@ static void rebuild(void)
     close_info();
     lv_obj_clean(s_grid);
     free_items();
-    static msw_app_info_t list[MSW_APP_MAX_APPS];
+    static EXT_RAM_BSS_ATTR msw_app_info_t list[MSW_APP_MAX_APPS];   /* 3 KB: PSRAM */
     int n = msw_app_list(list, MSW_APP_MAX_APPS);
     s_items = n ? heap_caps_calloc(n, sizeof(item_t), MALLOC_CAP_SPIRAM) : NULL;
     if (n && !s_items) {

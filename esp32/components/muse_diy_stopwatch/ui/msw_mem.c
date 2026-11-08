@@ -254,11 +254,15 @@ void msw_mem_start(void)
 
 /* museStopWatch serial commands, ">msw.<name>" (muse_input.c). Other components
  * add theirs with msw_console_add() (a weak symbol would lose to this archive's). */
-static bool (*s_more)(const char *line);
+#define MORE_MAX 4   /* sanotts and miniapp today; one slot used to let the last one win */
+static bool (*s_more[MORE_MAX])(const char *line);
+static int s_more_n;
 
 void msw_console_add(bool (*fn)(const char *line))
 {
-    s_more = fn;
+    if (s_more_n < MORE_MAX) {
+        s_more[s_more_n++] = fn;
+    }
 }
 
 bool msw_console(const char *line)
@@ -276,8 +280,10 @@ bool msw_console(const char *line)
         return true;
     }
 #endif
-    if (s_more && s_more(line)) {
-        return true;
+    for (int i = 0; i < s_more_n; i++) {
+        if (s_more[i](line)) {
+            return true;
+        }
     }
     printf("@msw.error unknown command \"%s\"\n", line);
     fflush(stdout);

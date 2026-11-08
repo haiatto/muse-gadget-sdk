@@ -18,6 +18,7 @@
 #include "freertos/FreeRTOS.h"
 
 #include "muse_voice.h"
+#include "esp_attr.h"
 #include "msw_app_priv.h"
 
 #define RATE 16000
@@ -37,7 +38,7 @@ typedef struct {
 } chan_t;
 
 static chan_t s_ch[MSW_SOUND_CHANNELS];
-static int16_t s_pcm[PCM_RING];
+static EXT_RAM_BSS_ATTR int16_t s_pcm[PCM_RING];   /* 16 KB: PSRAM (internal RAM is short) */
 static int s_pcm_r, s_pcm_n;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 static const muse_voice_player_t *s_prev;

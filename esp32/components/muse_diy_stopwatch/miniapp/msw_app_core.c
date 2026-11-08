@@ -848,7 +848,7 @@ static size_t s_put_len, s_put_cap;
 
 static void print_list(void)
 {
-    static msw_app_info_t list[MSW_APP_MAX_APPS];
+    static EXT_RAM_BSS_ATTR msw_app_info_t list[MSW_APP_MAX_APPS];   /* 3 KB: PSRAM */
     int n = msw_app_list(list, MSW_APP_MAX_APPS);
     for (int i = 0; i < n; i++) {
         printf("@msw.app %s v%u %u bytes \"%s\"\n", list[i].id, list[i].ver, (unsigned)list[i].bytes, list[i].name);
