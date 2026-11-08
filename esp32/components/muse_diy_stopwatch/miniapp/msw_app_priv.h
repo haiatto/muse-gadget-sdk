@@ -66,6 +66,9 @@ const char *msw_app_running(void);           /* its id, or NULL */
 size_t msw_app_log_text(char *buf, size_t cap);
 void msw_app_logf(const char *fmt, ...);
 uint32_t msw_app_changes(void);              /* bumps on install, remove, start, stop */
+/* The app's files kept in its package (sdk/build.py adds them): malloc'd
+ * text, or NULL with code "not_found", "no_source" or "out_of_memory". */
+char *msw_app_source(const char *id, const char **code);
 
 /* Calls fn(arg) on the service task, whose stack is internal RAM: the one
  * that may touch flash (FAT on the apps partition). Waits for it. */

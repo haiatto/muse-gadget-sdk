@@ -337,6 +337,85 @@ static bool check_symbols(const uint8_t *elf, size_t n, char *msg, size_t msg_le
     return missing == 0;
 }
 
+/* The app's files, which sdk/build.py adds after the ELF: "MSWS", a 32-bit
+ * length, then that much UTF-8 text. Returns the length (0: none or broken)
+ * and, with text, where it starts. */
+static size_t source_at(const uint8_t *data, size_t n, const char **text)
+{
+    const msw_app_pkg_t *h = (const msw_app_pkg_t *)data;
+    if (n < sizeof(*h)) {
+        return 0;
+    }
+    size_t base = sizeof(*h) + (size_t)h->icon_size + h->elf_size;
+    if (base > n || n - base < 8 || memcmp(data + base, "MSWS", 4)) {
+        return 0;
+    }
+    uint32_t len;
+    memcpy(&len, data + base + 4, 4);
+    if (len != n - base - 8) {
+        return 0;
+    }
+    if (text) {
+        *text = (const char *)data + base + 8;
+    }
+    return len;
+}
+
+static size_t source_size(const uint8_t *data, size_t n)
+{
+    return source_at(data, n, NULL);
+}
+
+typedef struct {
+    const char *id;
+    char *text;        /* malloc'd, NUL-terminated */
+    const char *code;
+} src_req_t;
+
+static void read_source(void *arg)
+{
+    src_req_t *q = arg;
+    char path[64];
+    app_path(path, sizeof(path), q->id, "mswapp");
+    q->code = "not_found";
+    FILE *f = s_mounted ? fopen(path, "rb") : NULL;
+    if (!f) {
+        return;
+    }
+    struct stat st;
+    size_t n = fstat(fileno(f), &st) == 0 ? (size_t)st.st_size : 0;
+    uint8_t *buf = n && n <= MSW_APP_MAX_BYTES ? heap_caps_malloc(n, MALLOC_CAP_SPIRAM) : NULL;
+    bool read = buf && fread(buf, 1, n, f) == n;
+    fclose(f);
+    q->code = "out_of_memory";
+    if (read) {
+        const char *text;
+        size_t len = source_at(buf, n, &text);
+        q->code = "no_source";
+        if (len) {
+            q->text = heap_caps_malloc(len + 1, MALLOC_CAP_SPIRAM);
+            q->code = q->text ? NULL : "out_of_memory";
+            if (q->text) {
+                memcpy(q->text, text, len);
+                q->text[len] = '\0';
+            }
+        }
+    }
+    free(buf);
+}
+
+char *msw_app_source(const char *id, const char **code)
+{
+    src_req_t q = { .id = id };
+    if (!valid_id(id)) {
+        *code = "not_found";
+        return NULL;
+    }
+    msw_app_service(read_source, &q);
+    *code = q.code;
+    return q.text;
+}
+
 /* Header, sizes and CRC; the ELF must be loadable. */
 static bool check_package(const uint8_t *data, size_t n, const char **code, char *msg, size_t msg_len)
 {
@@ -346,7 +425,8 @@ static bool check_package(const uint8_t *data, size_t n, const char **code, char
         snprintf(msg, msg_len, "not a mini-app package (.mswapp)");
         return false;
     }
-    if (sizeof(*h) + (size_t)h->icon_size + h->elf_size != n) {
+    size_t base = sizeof(*h) + (size_t)h->icon_size + h->elf_size;
+    if (base != n && source_size(data, n) == 0) {
         snprintf(msg, msg_len, "package size %u does not match its header", (unsigned)n);
         return false;
     }
@@ -898,6 +978,16 @@ static bool console(const char *line)
             free(buf);
         }
         printf("@msw.app.log done\n");
+    } else if (!strncmp(cmd, "src ", 4)) {
+        const char *why;
+        char *text = msw_app_source(cmd + 4, &why);
+        if (text) {
+            fputs(text, stdout);
+            free(text);
+            printf("@msw.app.src done\n");
+        } else {
+            printf("@msw.app.src error %s\n", why);
+        }
     } else if (!strncmp(cmd, "put ", 4)) {
         /* put <bytes>, then data <base64> lines, then end */
         free(s_put);
@@ -929,7 +1019,7 @@ static bool console(const char *line)
         free(s_put);
         s_put = NULL;
     } else {
-        printf("@msw.app.error unknown: list, run <id>, stop, rm <id>, log, put <n>, data <b64>, end\n");
+        printf("@msw.app.error unknown: list, run <id>, stop, rm <id>, log, src <id>, put <n>, data <b64>, end\n");
     }
     fflush(stdout);
     return true;

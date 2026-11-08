@@ -7,6 +7,7 @@
  *   app.list    installed apps and the running one
  *   app.run     start an app by id          app.stop   end the running one
  *   app.remove  delete an app by id         app.log    the app log
+ *   app.source  the app's files kept in its package (sdk/build.py adds them)
  *   app.install is async: main/app.c fetches the file from the VM and hands
  *               it to msw_app_install_json.
  *
@@ -191,6 +192,22 @@ cJSON *msw_app_command(const char *command, const cJSON *params)
         }
         cJSON *payload;
         return ok_payload(&payload);
+    }
+    if (!strcmp(c, "source")) {
+        const char *id = str(params, "id");
+        if (!id) {
+            return fail("missing_param", "id is required");
+        }
+        const char *code;
+        char *text = msw_app_source(id, &code);
+        if (!text) {
+            return fail(code, !strcmp(code, "no_source")
+                                  ? "this app was installed without its source (built before build.py kept it)"
+                                  : !strcmp(code, "not_found") ? "no such app" : "out of memory");
+        }
+        cJSON *r = page(text, text + strlen(text), params);
+        free(text);
+        return r;
     }
     if (!strcmp(c, "log")) {
         char *buf = heap_caps_malloc(8192, MALLOC_CAP_SPIRAM);

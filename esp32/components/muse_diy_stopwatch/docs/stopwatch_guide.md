@@ -1,5 +1,5 @@
 # Muse DIY StopWatch 総合ガイド
-版: 2026-11-08.3
+版: 2026-11-08.4
 
 この時計（Muse DIY StopWatch）と話すときの全体のガイドです。ツールの説明だけでは書ききれない
 使い方・組み合わせ方・注意をまとめています。一度読んだら、`stopwatch.doc` の説明にある版が
@@ -73,6 +73,7 @@
 - `app.api`: ミニアプリの API（C のヘッダー）。
 - `app.install`（path、run）: VM の `.mswapp` を入れる。同じ id なら更新。
 - `app.list`、`app.run`（id）、`app.stop`、`app.remove`（id）、`app.log`（動かした後とおかしいときに読む）。
+- `app.source`（id）: 時計に入っているアプリのソース。`sdk/build.py` が `.mswapp` にソースを入れるので、VM のファイルがなくても直せる。
 - ユーザーが「ゲームを作って」と言ったら、まず `app.doc` を読んでください。
 - 絵・名前・音楽はオリジナルだけ。既存の作品の素材やキャラは使わない。
 

@@ -1651,6 +1651,15 @@ static char *build_register_json(void) {
         cJSON_AddItemToObject(rm_req, "id", string_param("The app's id (app.list)."));
         add_command(commands, "app.remove", "Delete a mini app and its saved data.",
                     rm_req, nullptr);
+        cJSON *src_req = cJSON_CreateObject();
+        cJSON_AddItemToObject(src_req, "id", string_param("The app's id (app.list)."));
+        cJSON *src_opt = cJSON_Duplicate(offset, true);
+        add_command(commands, "app.source",
+                    "The source of an installed mini app (its app.json, .c and .h files, "
+                    "each after a '--- name ---' line), kept on the watch with the app. "
+                    "Use it to fix or extend an app when your copy is gone. Paged like app.doc. "
+                    "Error no_source: the app was built before sdk/build.py kept the source.",
+                    src_req, src_opt);
         add_command(commands, "app.log",
                     "The mini-app log: msw_log lines, load errors, crashes, what was "
                     "freed. Read it after app.run and whenever an app misbehaves.",
