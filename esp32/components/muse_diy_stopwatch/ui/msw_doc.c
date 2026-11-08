@@ -39,8 +39,12 @@ cJSON *msw_doc_command(const char *command, const cJSON *params)
     if (strcmp(command, "stopwatch.doc")) {
         return NULL;
     }
+    /* A result is {ok, payload}: noise_control.cpp's wrap_result_json sends
+     * only those (and error), so anything else is dropped. */
     cJSON *r = cJSON_CreateObject();
-    cJSON_AddStringToObject(r, "version", msw_doc_version());
-    cJSON_AddStringToObject(r, "content", guide_start);
+    cJSON_AddBoolToObject(r, "ok", true);
+    cJSON *payload = cJSON_AddObjectToObject(r, "payload");
+    cJSON_AddStringToObject(payload, "version", msw_doc_version());
+    cJSON_AddStringToObject(payload, "content", guide_start);
     return r;
 }
