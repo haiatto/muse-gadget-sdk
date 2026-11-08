@@ -1941,6 +1941,31 @@ static cJSON *bug_report_command(
 
 #endif  // CONFIG_HOMEHUB_BLE_COMMANDS
 
+/* museStopWatch: on-device Japanese speech (components/sanotts); NULL when not linked in. */
+extern const char *msw_tts_say(const char *text) __attribute__((weak));
+extern void msw_tts_stop(void) __attribute__((weak));
+/* museStopWatch: mini apps (components/miniapp); NULL when not linked in. */
+extern cJSON *msw_app_command(const char *command, const cJSON *params) __attribute__((weak));
+extern cJSON *msw_app_install_json(const uint8_t *data, size_t n, bool run) __attribute__((weak));
+
+#if CONFIG_HOMEHUB_DISPLAY_COMMANDS
+typedef struct {
+    noise_ctrl_session_generation_t session_generation;
+    char request_id[64];
+    bool run;
+} app_install_ctx_t;
+
+static void app_install_done(uint8_t *data, size_t len, const char *code, const char *message,
+                             void *user) {
+    app_install_ctx_t *ctx = user;
+    cJSON *result = data ? msw_app_install_json(data, len, ctx->run)
+                         : command_error(code, message);
+    free(data);
+    noise_ctrl_send_command_result(ctx->session_generation, ctx->request_id, result);
+    free(ctx);
+}
+#endif
+
 static cJSON *on_ws_command(
     const char *command, cJSON *params, const char *request_id,
     noise_ctrl_session_generation_t session_generation) {
@@ -2012,6 +2037,53 @@ static cJSON *on_ws_command(
         return voice_configure_command(params);
     }
 #endif
+    /* museStopWatch: mini apps (components/miniapp). */
+#if CONFIG_HOMEHUB_DISPLAY_COMMANDS
+    if (msw_app_install_json && strcmp(command, "app.install") == 0) {
+        cJSON *path = cJSON_GetObjectItem(params, "path");
+        if (!cJSON_IsString(path) || !path->valuestring || !path->valuestring[0]) {
+            return command_error("missing_param", "path is required");
+        }
+        app_install_ctx_t *ctx = calloc(1, sizeof(*ctx));
+        if (!ctx) return command_error("out_of_memory", "failed to allocate");
+        ctx->session_generation = session_generation;
+        strncpy(ctx->request_id, request_id, sizeof(ctx->request_id) - 1);
+        ctx->run = cJSON_IsTrue(cJSON_GetObjectItem(params, "run"));
+        const char *code, *message;
+        if (!image_fetch_vm_file(path->valuestring, 1024 * 1024, app_install_done, ctx,
+                                 &code, &message)) {
+            free(ctx);
+            return command_error(code, message);
+        }
+        cJSON *async = cJSON_CreateObject();
+        cJSON_AddBoolToObject(async, "_async", true);
+        return async;
+    }
+#endif
+    if (msw_app_command && strncmp(command, "app.", 4) == 0) {
+        cJSON *r = msw_app_command(command, params);
+        if (r) return r;
+    }
+    /* museStopWatch: on-device Japanese speech (components/sanotts, msw_tts.c). */
+    if (msw_tts_say && strcmp(command, "voice.say") == 0) {
+        cJSON *text = cJSON_GetObjectItem(params, "text");
+        const char *why = msw_tts_say(cJSON_IsString(text) ? text->valuestring : NULL);
+        if (why) {
+            return command_error(why, !strcmp(why, "speaker_off") ? "the speaker is turned off on the device"
+                                      : !strcmp(why, "busy") ? "already speaking; voice.stop first"
+                                      : !strcmp(why, "empty") ? "text is required"
+                                      : "not enough memory to speak");
+        }
+        cJSON *result = cJSON_CreateObject();
+        cJSON_AddBoolToObject(result, "ok", true);
+        return result;
+    }
+    if (msw_tts_stop && strcmp(command, "voice.stop") == 0) {
+        msw_tts_stop();
+        cJSON *result = cJSON_CreateObject();
+        cJSON_AddBoolToObject(result, "ok", true);
+        return result;
+    }
 #if CONFIG_HOMEHUB_SENSECAP_SENSORS
     if (strcmp(command, "sensors.read") == 0) {
         return sensecap_sensors_command();
@@ -2448,8 +2520,10 @@ static const vm_info_t *find_vm_by_id(const vm_info_t *vms, int count, const cha
 
 // Runs on an internal-RAM stack: the caller's may be in PSRAM, and this reads
 // and (on token refresh) writes NVS.
-static void hatch_vm_task(void *arg) {
-    hatch_vm_request_t *req = arg;
+// museStopWatch: one lasting task on a stack set aside at build time. Making an
+// 8 KB task per lookup failed once the Web server held internal RAM (the
+// largest free block was 7 KB), and every turn said "Can't reach Muse".
+static void hatch_vm_lookup(hatch_vm_request_t *req) {
     if (config_is_provisioned() && operation_gate_take(pdMS_TO_TICKS(15000), "Muse VM lookup")) {
         vm_info_t vms[VM_API_MAX_VMS];
         int count = fetch_vms_with_refresh_with_gate_held(vms, VM_API_MAX_VMS);
@@ -2474,9 +2548,35 @@ static void hatch_vm_task(void *arg) {
         }
         operation_gate_give();
     }
-    xTaskNotifyGive(req->waiter);
-    stack_monitor_record(NULL);
-    vTaskDelete(NULL);
+}
+
+#define HATCH_VM_STACK 8192
+// With code and read-only data in PSRAM flash writes leave the cache on, so the
+// stack can live there too (helper_task.h); elsewhere it must be internal.
+#if CONFIG_SPIRAM_FETCH_INSTRUCTIONS && CONFIG_SPIRAM_RODATA
+static StackType_t *s_vm_stack;
+#else
+static StackType_t s_vm_stack_buf[HATCH_VM_STACK / sizeof(StackType_t)];
+static StackType_t *s_vm_stack = s_vm_stack_buf;
+#endif
+static StaticTask_t s_vm_tcb;
+static TaskHandle_t s_vm_task;
+static SemaphoreHandle_t s_vm_lock;
+static StaticSemaphore_t s_vm_lock_buf;
+static portMUX_TYPE s_vm_init_lock = portMUX_INITIALIZER_UNLOCKED;
+static hatch_vm_request_t *volatile s_vm_req;
+
+static void hatch_vm_task(void *arg) {
+    (void)arg;
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        hatch_vm_request_t *req = s_vm_req;
+        if (!req) continue;
+        hatch_vm_lookup(req);
+        stack_monitor_record(NULL);
+        s_vm_req = NULL;
+        xTaskNotifyGive(req->waiter);
+    }
 }
 
 bool app_hatch_vm_credentials(const char *want_vm, char *vm_id, size_t id_cap,
@@ -2486,10 +2586,28 @@ bool app_hatch_vm_credentials(const char *want_vm, char *vm_id, size_t id_cap,
         .vm_name = vm_name, .name_cap = name_cap,
         .waiter = xTaskGetCurrentTaskHandle(),
     };
-    if (xTaskCreate(hatch_vm_task, "muse_vm", 8192, &req, 4, NULL) != pdPASS) {
+    taskENTER_CRITICAL(&s_vm_init_lock);
+    if (!s_vm_lock) s_vm_lock = xSemaphoreCreateMutexStatic(&s_vm_lock_buf);
+    taskEXIT_CRITICAL(&s_vm_init_lock);
+    xSemaphoreTake(s_vm_lock, portMAX_DELAY);
+#if CONFIG_SPIRAM_FETCH_INSTRUCTIONS && CONFIG_SPIRAM_RODATA
+    if (!s_vm_stack) {
+        s_vm_stack = heap_caps_malloc(HATCH_VM_STACK, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+#endif
+    if (!s_vm_task && s_vm_stack) {
+        s_vm_task = xTaskCreateStatic(hatch_vm_task, "muse_vm", HATCH_VM_STACK, NULL, 4,
+                                      s_vm_stack, &s_vm_tcb);
+    }
+    if (!s_vm_task) {
+        xSemaphoreGive(s_vm_lock);
         return false;
     }
+    s_vm_req = &req;
+    ulTaskNotifyTake(pdTRUE, 0);  // drop a stale wake before waiting for ours
+    xTaskNotifyGive(s_vm_task);
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    xSemaphoreGive(s_vm_lock);
     *vm_token = req.vm_token;
     return req.ok;
 }

@@ -18,6 +18,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "sdkconfig.h"
 
@@ -70,6 +71,15 @@ bool image_fetch_start(const char *url, int row, image_fetch_done_cb done,
 // image_fetch_start.
 bool image_fetch_start_vm(const char *path, int row, image_fetch_done_cb done,
                           void *user, const char **code, const char **message);
+
+// museStopWatch: a whole file from the VM (GET /fs/raw/<path>, in ranges)
+// into PSRAM, up to max bytes, for app.install. done runs on the download
+// task with the data (the callee frees it) or NULL and an error code.
+// Shares the one-download limit.
+typedef void (*image_fetch_file_cb)(uint8_t *data, size_t len, const char *code,
+                                    const char *message, void *user);
+bool image_fetch_vm_file(const char *path, size_t max, image_fetch_file_cb done,
+                         void *user, const char **code, const char **message);
 
 #ifdef __cplusplus
 }

@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_check.h"
 #include "esp_codec_dev.h"
 #include "esp_heap_caps.h"
@@ -44,9 +45,11 @@ static bool s_open;
 /* Opening, closing and the volume and gain setters, which other tasks call:
  * with a board-switched codec supply, none may reach a codec mid-switch. */
 static SemaphoreHandle_t s_lock;
-static int16_t s_in_stereo[MUSE_AUDIO_CHUNK * CHANNELS];
-static int16_t s_in_mono[MUSE_AUDIO_CHUNK];
-static int16_t s_out_stereo[MUSE_AUDIO_CHUNK * CHANNELS];
+/* museStopWatch: PSRAM (EXT_RAM_BSS_ATTR): the I2S driver copies to and from its own
+ * DMA buffers, so these need not be internal. Saves about 3 KB of internal RAM. */
+static EXT_RAM_BSS_ATTR int16_t s_in_stereo[MUSE_AUDIO_CHUNK * CHANNELS];
+static EXT_RAM_BSS_ATTR int16_t s_in_mono[MUSE_AUDIO_CHUNK];
+static EXT_RAM_BSS_ATTR int16_t s_out_stereo[MUSE_AUDIO_CHUNK * CHANNELS];
 
 /* One-pole high-pass on the mixed mic signal. */
 static float s_hpf_a;
@@ -466,7 +469,7 @@ float muse_audio_level(const int16_t *mono, size_t frames)
 void muse_audio_chirp(int rising)
 {
     enum { MS = 90, N = MUSE_AUDIO_RATE * MS / 1000 };
-    static int16_t buf[N];
+    static EXT_RAM_BSS_ATTR int16_t buf[N];   /* museStopWatch: PSRAM */
     float f0 = rising ? 620.0f : 980.0f;
     float f1 = rising ? 1180.0f : 560.0f;
     float phase = 0;

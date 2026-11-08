@@ -992,6 +992,116 @@ static bool start(const char *target, bool vm, int row, image_fetch_done_cb done
     return true;
 }
 
+// museStopWatch: a whole file from the VM into PSRAM (a mini app for
+// app.install), read in the same Range requests as draw_file.
+typedef struct {
+    fetch_t f;
+    size_t max;
+    image_fetch_file_cb file_done;
+} file_fetch_t;
+
+static void file_task(void *arg) {
+    file_fetch_t *ff = arg;
+    fetch_t *f = &ff->f;
+    f->deadline_us = esp_timer_get_time() + FETCH_DEADLINE_MS * 1000LL;
+    image_fetch_result_t result = { .code = "download_failed" };
+    char msg[64];
+    uint8_t *data = NULL;
+    size_t len = 0;
+    const char *code = "download_failed", *message = NULL;
+    if (vm_open(f, &result, msg, sizeof(msg))) {
+        size_t cap = 64 * 1024;
+        data = heap_caps_malloc(cap, VM_CAPS);
+        while (data) {
+            if (len == cap) {
+                if (cap >= ff->max) {
+                    code = "too_large";
+                    message = "the file is larger than allowed";
+                    break;
+                }
+                size_t ncap = cap * 2 > ff->max ? ff->max : cap * 2;
+                uint8_t *n = heap_caps_realloc(data, ncap, VM_CAPS);
+                if (!n) break;
+                data = n;
+                cap = ncap;
+            }
+            int got = vm_read(f, data + len, cap - len);
+            if (got < 0) {
+                message = f->timed_out ? "download timed out" : "download failed";
+                break;
+            }
+            len += (size_t)got;
+            if (got == 0 || (f->eof && f->body_pos == f->body_len)) {
+                code = NULL;
+                break;
+            }
+        }
+        if (!data) {
+            code = "out_of_memory";
+            message = "failed to allocate";
+        }
+    } else {
+        message = result.message;
+    }
+    if (code) {
+        free(data);
+        data = NULL;
+        len = 0;
+    }
+    ESP_LOGI(TAG, "file %s: %s, %u bytes", f->url, code ? code : "done", (unsigned)len);
+    free(f->body);
+    free(f->url);
+    atomic_store(&s_busy, false);
+    ff->file_done(data, len, code, message ? message : "", f->user);
+    free(ff);
+    vTaskDelete(NULL);
+}
+
+bool image_fetch_vm_file(const char *path, size_t max, image_fetch_file_cb done,
+                         void *user, const char **code, const char **message) {
+    const char *name = path + strspn(path, "/");
+    if (!*name) {
+        *code = "invalid_params";
+        *message = "path names no file";
+        return false;
+    }
+    bool expected = false;
+    if (!atomic_compare_exchange_strong(&s_busy, &expected, true)) {
+        *code = "busy";
+        *message = "another download is still running";
+        return false;
+    }
+    if (!s_vm.lock && !(s_vm.lock = xSemaphoreCreateMutex())) {
+        atomic_store(&s_busy, false);
+        *code = "out_of_memory";
+        *message = "failed to allocate";
+        return false;
+    }
+    file_fetch_t *ff = calloc(1, sizeof(*ff));
+    fetch_t *f = ff ? &ff->f : NULL;
+    if (f) f->url = vm_request_path(path);
+    bool ok = f && f->url && vm_allocate_body(f, FETCH_STACK_BYTES, 0);
+    if (ok) {
+        f->vm = true;
+        f->user = user;
+        ff->max = max;
+        ff->file_done = done;
+        ok = xTaskCreate(file_task, "vm_file", FETCH_STACK_BYTES, ff, 4, NULL) == pdPASS;
+    }
+    if (!ok) {
+        if (f) {
+            free(f->body);
+            free(f->url);
+        }
+        free(ff);
+        atomic_store(&s_busy, false);
+        *code = "out_of_memory";
+        *message = "failed to start the download";
+        return false;
+    }
+    return true;
+}
+
 bool image_fetch_start(const char *url, int row, image_fetch_done_cb done,
                        void *user, const char **code, const char **message) {
     return start(url, false, row, done, user, code, message);

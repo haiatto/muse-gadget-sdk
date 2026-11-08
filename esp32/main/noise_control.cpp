@@ -60,6 +60,12 @@ extern "C" {
 #include <xplat/noise/core/ClientSession.h>
 #include <xplat/noise/core/PsaCryptoBackend.h>
 #include <xplat/noise/core/ServiceCodec.h>
+#include "msw_stack.h"   // museStopWatch: PSRAM task stacks
+
+// museStopWatch: on-device Japanese speech (components/sanotts); NULL when not linked in.
+extern "C" const char *msw_tts_say(const char *text) __attribute__((weak));
+// museStopWatch: mini apps (components/miniapp); NULL when not linked in.
+extern "C" cJSON *msw_app_command(const char *command, const cJSON *params) __attribute__((weak));
 
 using namespace musegadgets::noise::core;
 
@@ -207,7 +213,9 @@ static bool s_heartbeat_registered = false;
 static TaskHandle_t s_task = nullptr;
 
 #define NOISE_CTRL_STACK 12288
-#if CONFIG_MUSE_ENABLED && CONFIG_SPIRAM
+#if CONFIG_MUSE_ENABLED && CONFIG_SPIRAM && !(CONFIG_SPIRAM_FETCH_INSTRUCTIONS && CONFIG_SPIRAM_RODATA)
+// museStopWatch: with code in PSRAM the stack goes there (msw_stack.h), so
+// nothing is held in internal RAM.
 // Muse's display and audio leave internal RAM fragmented by the time a session
 // starts, often without a 12 KB block for this stack. Hold one from boot and
 // hand it over just before the task is created. The idle task frees a
@@ -1543,6 +1551,80 @@ static char *build_register_json(void) {
                 "reports the current one.",
                 nullptr, volume_optional);
 #endif
+    if (msw_tts_say) {
+        cJSON *say_required = cJSON_CreateObject();
+        cJSON_AddItemToObject(say_required, "text", string_param(
+            "Japanese text to read aloud (UTF-8): kanji, kana and punctuation. "
+            "Long text is fine; it is read sentence by sentence."));
+        add_command(commands, "voice.say",
+                    "Read Japanese text aloud on the device's own speaker with its "
+                    "built-in voice (sanoTTS-jp, runs on the device, no network). "
+                    "Your replies to a voice message are already read aloud with "
+                    "this voice, so you don't need this to answer. Use it to say "
+                    "something other than your written reply (for example a "
+                    "shorter spoken version, or kana readings): when you call it "
+                    "during a voice turn, it is spoken in place of your reply, "
+                    "and the reply is only shown. "
+                    "Returns at once; speech starts within about half a second. "
+                    "A button press or voice.stop stops it. Japanese only: Latin "
+                    "letters and symbols may be read oddly or skipped, and rare "
+                    "words or names may be misread, so write those in kana "
+                    "(hiragana or katakana). Errors: speaker_off (the user turned "
+                    "the speaker off: show text instead), busy (already speaking), "
+                    "empty, out_of_memory.",
+                    say_required, nullptr);
+        add_command(commands, "voice.stop",
+                    "Stop what voice.say is reading.", nullptr, nullptr);
+    }
+    if (msw_app_command) {
+        cJSON *offset = cJSON_CreateObject();
+        cJSON *off = cJSON_CreateObject();
+        cJSON_AddStringToObject(off, "type", "integer");
+        cJSON_AddStringToObject(off, "description", "Where to continue: the last reply's next.");
+        cJSON_AddItemToObject(offset, "offset", off);
+        add_command(commands, "app.doc",
+                    "READ THIS FIRST before making, installing or fixing a mini app. "
+                    "Mini apps are small C programs (games, tools) you build on your VM "
+                    "and run on this watch. Returns the guide (Markdown): how to build, "
+                    "install, test and debug, patterns and pitfalls. Long: pages; pass "
+                    "offset = next until there is no next.",
+                    nullptr, offset);
+        cJSON *offset2 = cJSON_Duplicate(offset, true);
+        add_command(commands, "app.api",
+                    "The mini-app API header (msw_app.h, C) the guide refers to. "
+                    "Pages like app.doc.",
+                    nullptr, offset2);
+#if CONFIG_HOMEHUB_DISPLAY_COMMANDS
+        cJSON *inst = cJSON_CreateObject();
+        cJSON_AddItemToObject(inst, "path", string_param(
+            "Path of the .mswapp package on this VM, as for display.draw_file."));
+        cJSON *inst_opt = cJSON_CreateObject();
+        cJSON *run = cJSON_CreateObject();
+        cJSON_AddStringToObject(run, "type", "boolean");
+        cJSON_AddStringToObject(run, "description", "Start it once installed.");
+        cJSON_AddItemToObject(inst_opt, "run", run);
+        add_command(commands, "app.install",
+                    "Install (or update: same id) a mini app from a .mswapp file on "
+                    "your VM. Errors: bad_format, api_too_new, missing_symbol (the "
+                    "message names what the firmware lacks), no_space, busy.",
+                    inst, inst_opt);
+#endif
+        add_command(commands, "app.list",
+                    "The installed mini apps, and which one runs now.", nullptr, nullptr);
+        cJSON *run_req = cJSON_CreateObject();
+        cJSON_AddItemToObject(run_req, "id", string_param("The app's id (app.list)."));
+        add_command(commands, "app.run", "Start an installed mini app (ends the one running).",
+                    run_req, nullptr);
+        add_command(commands, "app.stop", "End the running mini app.", nullptr, nullptr);
+        cJSON *rm_req = cJSON_CreateObject();
+        cJSON_AddItemToObject(rm_req, "id", string_param("The app's id (app.list)."));
+        add_command(commands, "app.remove", "Delete a mini app and its saved data.",
+                    rm_req, nullptr);
+        add_command(commands, "app.log",
+                    "The mini-app log: msw_log lines, load errors, crashes, what was "
+                    "freed. Read it after app.run and whenever an app misbehaves.",
+                    nullptr, nullptr);
+    }
 
 #if CONFIG_HOMEHUB_SENSECAP_SENSORS
     add_command(commands, "sensors.read",
@@ -2546,7 +2628,7 @@ static void noise_ctrl_task(void *arg) {
     }
     stack_monitor_record(NULL);
     s_task = nullptr;
-    vTaskDelete(nullptr);
+    msw_task_delete_self();
 }
 
 // ---- Public API (extern "C") ------------------------------------------------
@@ -2603,7 +2685,7 @@ extern "C" bool noise_ctrl_connect(const char *vm_id, const char *auth_token,
 
     s_running = true;
     release_stack();
-    if (xTaskCreate(noise_ctrl_task, "noise_ctrl", NOISE_CTRL_STACK, nullptr, 5, &s_task) != pdPASS) {
+    if (msw_task_create(noise_ctrl_task, "noise_ctrl", NOISE_CTRL_STACK, nullptr, 5, &s_task) != pdPASS) {
         s_running = false;
         s_task = nullptr;
         reserve_stack();

@@ -1,0 +1,3 @@
+https://github.com/ayutaz/sanoTTS-jp
+f05d7ae2b4b4be362824e19e21acf6ce585ed0a6 2026-11-02 chore(deps): bump actions/cache from 4 to 6 (#41)
+Copied unchanged by tools/sync_sanotts.py. Do not edit; re-run the script.

@@ -75,3 +75,39 @@ bool muse_voice_resting(void);
 /* Voice notes recorded out of Hatch's reach wait to go, the oldest from the
  * last half hour: worth keeping Wi-Fi up for. */
 bool muse_voice_notes_waiting(void);
+
+/* museStopWatch: another audio source (the local TTS) the voice task plays
+ * when it is idle, 16 kHz mono like replies. ready(): something to play now.
+ * read(): up to max frames, 0 when none are ready yet. done(): nothing more
+ * will come. stop(): a press interrupted playback (drop the rest).
+ * The voice task polls ready() each 20 ms idle loop; kick() wakes it sooner. */
+typedef struct {
+    bool (*ready)(void);
+    size_t (*read)(int16_t *mono, size_t max);
+    bool (*done)(void);
+    void (*stop)(void);
+} muse_voice_player_t;
+void muse_voice_set_player(const muse_voice_player_t *player);
+/* museStopWatch: the player set now (mini apps mix their sound over it). */
+const muse_voice_player_t *muse_voice_get_player(void);
+void muse_voice_player_kick(void);
+
+/* museStopWatch: a local voice for Muse's replies (the chat session speaks
+ * each message with it instead of pacing the captions with silence).
+ * start(text): starts speaking a reply message; false if it can't (speaker
+ *   off, already speaking, no memory): the captions are paced silently then.
+ * read(): 16 kHz mono made so far, up to max; 0 while more is coming;
+ *   -1 when the speech (a reply, or a say that took over) has all been read.
+ * says(): counts say requests (Muse's voice.say). Once a turn has one, its
+ *   remaining replies aren't spoken; say_live() tells if the say's audio is
+ *   still to be read, which the turn then plays in place of the reply.
+ * cancel(): the turn was interrupted: drop whatever is being spoken. */
+typedef struct {
+    bool (*start)(const char *text);
+    int (*read)(int16_t *mono, size_t max);
+    uint32_t (*says)(void);
+    bool (*say_live)(void);
+    void (*cancel)(void);
+} muse_reply_voice_t;
+void muse_reply_voice_set(const muse_reply_voice_t *voice);
+const muse_reply_voice_t *muse_reply_voice(void);

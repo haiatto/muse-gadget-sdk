@@ -15,6 +15,7 @@
  */
 
 #include "muse_input.h"
+#include "msw_stack.h"   /* museStopWatch: PSRAM task stacks */
 
 #include <stdint.h>
 #include <stdatomic.h>
@@ -64,6 +65,15 @@ static atomic_uint s_touch_talk_events;
 void muse_input_touch_talk(bool pressed)
 {
     atomic_fetch_or(&s_touch_talk_events, pressed ? MUSE_BTN_TALK_PRESS : MUSE_BTN_TALK_RELEASE);
+}
+
+/* museStopWatch: a mini app's own talk control (msw_muse_talk). Unlike the
+ * talk button, it is not handed to the running app. */
+static atomic_uint s_app_talk_events;
+
+void muse_input_app_talk(bool pressed)
+{
+    atomic_fetch_or(&s_app_talk_events, pressed ? MUSE_BTN_TALK_PRESS : MUSE_BTN_TALK_RELEASE);
 }
 
 static const char *TAG = "muse_input";
@@ -634,6 +644,18 @@ static void dedicated_buttons(unsigned ev)
         }
     }
 #endif
+    /* museStopWatch: while a mini app runs, the speaker button (yellow) opens
+     * the app menu (components/miniapp). */
+    {
+        extern bool msw_app_button(bool down) __attribute__((weak));
+        bool took = false;
+        if (msw_app_button && (ev & MUSE_BTN_SPEAKER_PRESS)) took = msw_app_button(true);
+        if (msw_app_button && (ev & MUSE_BTN_SPEAKER_RELEASE)) took = msw_app_button(false) || took;
+        if (took) {
+            muse_state_poke();
+            return;
+        }
+    }
     if (ev & MUSE_BTN_SPEAKER_PRESS) {
         muse_state_poke();
         if (muse_state_asleep()) {
@@ -658,6 +680,8 @@ static void input_task(void *arg)
 
     for (;;) {
         unsigned ev = muse_board->poll_buttons() | atomic_exchange(&s_touch_talk_events, 0);
+        unsigned app_talk = atomic_exchange(&s_app_talk_events, 0);
+        ev |= app_talk;
 #if CONFIG_MUSE_VIDEO
         /* Any press leaves the video view (its release then does nothing). */
         const unsigned presses = MUSE_BTN_TALK_PRESS | MUSE_BTN_AUX_PRESS | MUSE_BTN_POWER_PRESS |
@@ -672,7 +696,20 @@ static void input_task(void *arg)
             ESP_LOGI(TAG, "talk key:%s%s", ev & MUSE_BTN_TALK_PRESS ? " press" : "",
                      ev & MUSE_BTN_TALK_RELEASE ? " release" : "");
 #if !CONFIG_MUSE_BOARD_SENSECAP_WATCHER
-            talk_button(ev);
+            /* museStopWatch: while a mini app runs, the talk button (blue)
+             * is the app's (components/miniapp); a talk already held
+             * finishes first. */
+            extern bool msw_app_blue(bool down) __attribute__((weak));
+            bool app_took = false;
+            if (msw_app_blue && !s_talk_down && !app_talk) {
+                if (ev & MUSE_BTN_TALK_PRESS) app_took = msw_app_blue(true);
+                if (ev & MUSE_BTN_TALK_RELEASE) app_took = msw_app_blue(false) || app_took;
+            }
+            if (app_took) {
+                muse_state_poke();
+            } else {
+                talk_button(ev);
+            }
 #endif
         }
 #if CONFIG_MUSE_BOARD_SENSECAP_WATCHER
@@ -848,6 +885,10 @@ static bool console_command(char *line, bool whole)
     if (whole && s_console_hook && s_console_hook(line)) {
         return true;
     }
+    if (whole && !strncmp(line, "msw.", 4)) {   /* museStopWatch: msw_console.c */
+        extern bool msw_console(const char *line);
+        return msw_console(line);
+    }
 #if CONFIG_MUSE_BOARD_SENSECAP_WATCHER
     if (!strcmp(line, "review.next") || !strcmp(line, "review.prev")) {
         set_asleep(false, "reply review");
@@ -977,7 +1018,7 @@ static bool console_command(char *line, bool whole)
 static void serial_task(void *arg)
 {
     if (muse_console_install(SERIAL_RX) != ESP_OK) {
-        vTaskDelete(NULL);
+        msw_task_delete_self();
     }
     for (;;) {
         uint8_t c;
@@ -1016,11 +1057,11 @@ void muse_input_set_console_hook(bool (*hook)(const char *line))
 esp_err_t muse_input_start(QueueHandle_t queue)
 {
     s_queue = queue;
-    if (xTaskCreate(input_task, "muse_input", 4096, NULL, 6, &s_input) != pdPASS) {
+    if (msw_task_create(input_task, "muse_input", 4096, NULL, 6, &s_input) != pdPASS) {
         return ESP_FAIL;
     }
     /* Bench-test and setup console; the input still works if it can't start. */
-    xTaskCreate(serial_task, "muse_serial", 3584, NULL, 5, NULL);
+    msw_task_create(serial_task, "muse_serial", 3584, NULL, 5, NULL);
     return ESP_OK;
 }
 

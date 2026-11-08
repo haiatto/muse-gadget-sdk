@@ -39,3 +39,13 @@ fullwidth forms. It has no Hangul, so Korean shows as boxes with it.
 Noto Sans SC is by Adobe and Google (https://github.com/notofonts/noto-cjk),
 licensed under the SIL Open Font License, version 1.1. This file is a
 conversion of an unaltered subset of the font.
+
+`muse_font_cjk_noto_jp_16.c` (museStopWatch) is the Japanese alternative,
+built in instead with `CONFIG_MUSE_CJK_FONT_NOTO_JP`: Noto Sans JP Medium at
+16 px, 4 bpp, for CJK punctuation, kana, the fullwidth forms and every
+character of JIS X 0208 (6355 kanji), 7064 glyphs.
+`tools/muse/gen_cjk_noto_jp_font.sh` regenerates it.
+
+Noto Sans JP is by Adobe and Google (https://github.com/notofonts/noto-cjk),
+licensed under the SIL Open Font License, version 1.1. This file is a
+conversion of an unaltered subset of the font.

@@ -2,6 +2,7 @@
 
 #include "muse_pixel.h"
 #include "muse_speaking.h"
+#include "esp_attr.h"   /* museStopWatch: EXT_RAM_BSS_ATTR */
 
 #include <math.h>
 #include <stdlib.h>
@@ -100,8 +101,10 @@ static bool s_scheme_init;
 static uint16_t s_pal[C_COUNT];
 static uint16_t s_pal_dim[C_COUNT];
 
-static uint8_t s_fb[W * H];
-static uint8_t s_mask[W * H];
+/* museStopWatch: CPU-only buffers, so PSRAM (EXT_RAM_BSS_ATTR; internal RAM when
+ * the build has no external .bss). Saves 8 KB of internal RAM. */
+static EXT_RAM_BSS_ATTR uint8_t s_fb[W * H];
+static EXT_RAM_BSS_ATTR uint8_t s_mask[W * H];
 
 static const uint8_t BAYER4[4][4] = {
     { 0, 8, 2, 10 },
@@ -124,7 +127,7 @@ static const uint8_t BAYER4[4][4] = {
 #define SQRT_LUT_N 1024                 /* indexed by x >> 2 */
 static int16_t s_pow_dome[POW_LUT_N + 1];   /* |u|^2.7 */
 static int16_t s_pow_base[POW_LUT_N + 1];   /* |u|^3.6 */
-static int16_t s_sqrt[SQRT_LUT_N + 1];
+static EXT_RAM_BSS_ATTR int16_t s_sqrt[SQRT_LUT_N + 1];   /* museStopWatch: PSRAM */
 
 static void init_luts(void)
 {

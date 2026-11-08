@@ -68,6 +68,9 @@
 #include "freertos/task.h"
 #include "lwip/sockets.h"
 
+// museStopWatch: mini apps (components/miniapp); NULL when not linked in.
+extern "C" void msw_app_muse_reply(const char *text) __attribute__((weak));
+
 extern "C" {
 #include "cJSON.h"
 #include "minimp3.h"
@@ -78,6 +81,12 @@ extern "C" {
 }
 #include "muse_chat_priv.h"
 #include "sdkconfig.h"
+#if !CONFIG_HOMEHUB_VOICE
+#define MSW_REPLY_VOICE 1   /* museStopWatch: replies spoken by a local voice (muse_reply_voice) */
+extern "C" {
+#include "muse_voice.h"
+}
+#endif
 #if CONFIG_MUSE_REALTIME_VOICE
 #include "muse_voice_call_priv.h"
 #endif
@@ -155,7 +164,7 @@ static_assert(MP3_BUF > MP3_POLL_ROOM + MP3_HOLD, "reads would stall with the MP
 
 /* ---- Voice task <-> session task ---- */
 
-enum cmd_type_t : uint8_t { CMD_CONNECT, CMD_FORGET, CMD_BEGIN, CMD_END, CMD_CANCEL, CMD_TEXT, CMD_TEXT_CANCEL, CMD_WAKE };
+enum cmd_type_t : uint8_t { CMD_CONNECT, CMD_FORGET, CMD_BEGIN, CMD_END, CMD_CANCEL, CMD_TEXT, CMD_TEXT_CANCEL, CMD_WAKE, CMD_SESSION };
 
 struct cmd_t {
     cmd_type_t type;
@@ -187,6 +196,7 @@ struct conn_t {
 };
 
 static conn_t s_conn;
+static bool s_sub_wait;   /* museStopWatch: see open_subscription() */
 static bool s_connected;
 static muse_hatch_vm_t s_vm;       /* cached per-VM credentials */
 static bool s_vm_direct;           /* s_vm.vm_token is the device token itself */
@@ -266,6 +276,8 @@ struct turn_t {
     /* TTS */
     int tts_msg;             /* message being fetched (or shown, speaker off), or -1 */
     bool silent;             /* speaker off: tts_msg is paced by silence, not fetched */
+    bool local;              /* museStopWatch: tts_msg is spoken by the local voice */
+    uint32_t says0;          /* museStopWatch: the local voice's say count at the turn's start */
     uint8_t *mp3;            /* MP3_BUF */
     size_t mp3_len;
     bool mp3_ended;
@@ -785,6 +797,7 @@ static void disconnect(const char *why)
         s.kind = K_NONE;
     }
     s_connected = false;
+    s_sub_wait = false;
 #if CONFIG_MUSE_REALTIME_VOICE
     muse_voice_call_disconnected();
 #endif
@@ -841,10 +854,36 @@ static bool resolve_vm(char *err, size_t err_cap)
     return false;
 }
 
+/*
+ * museStopWatch: a side chat. With a session_id (a UUID the device made) the
+ * note, typed text and the subscription go to that conversation, which Muse
+ * makes on its first message; empty is the main chat. As kantanMuse does.
+ */
+static portMUX_TYPE s_msw_lock = portMUX_INITIALIZER_UNLOCKED;
+static char s_msw_session[37];
+
+static void msw_session(char out[37])
+{
+    portENTER_CRITICAL(&s_msw_lock);
+    strlcpy(out, s_msw_session, 37);
+    portEXIT_CRITICAL(&s_msw_lock);
+}
+
+/* museStopWatch: Muse answers 404 to subscribing to a side chat it hasn't
+ * made yet; its first message makes it. Until then the connection stays up
+ * without a subscription, and the chat ack opens one (as the Linux SDK's
+ * send-user-msg --wait does). s_sub_wait is declared by s_conn. */
+
 static bool open_subscription(void)
 {
+    s_sub_wait = false;
     s_last_seq = 0;
-    s_conn.sub_id = open_stream(K_SUB, "POST", "/chat/subscribe", "application/json", "application/x-ndjson", "{}",
+    char id[37], body[64] = "{}";   /* museStopWatch: the side chat's events */
+    msw_session(id);
+    if (id[0]) {
+        snprintf(body, sizeof(body), "{\"session_id\":\"%s\"}", id);
+    }
+    s_conn.sub_id = open_stream(K_SUB, "POST", "/chat/subscribe", "application/json", "application/x-ndjson", body,
                                 true);
     return s_conn.sub_id != 0;
 }
@@ -996,6 +1035,15 @@ static void turn_reset_streams(void)
 static void turn_finish(void)
 {
     turn_reset_streams();
+#if MSW_REPLY_VOICE
+    if (s_turn.local && s_turn.tts_msg >= 0) {
+        const muse_reply_voice_t *v = muse_reply_voice();
+        if (v) {
+            v->cancel();   /* cut off mid-message */
+        }
+    }
+    s_turn.local = false;
+#endif
     s_turn.phase = P_IDLE;
     s_turn.dict_id = s_turn.chat_id = 0;
     s_turn.tts_msg = -1;
@@ -1047,6 +1095,11 @@ static bool turn_start(uint32_t gen, bool text)
 #endif
     s_turn.text = text;
     s_turn.tts_msg = -1;
+#if MSW_REPLY_VOICE
+    if (const muse_reply_voice_t *v = muse_reply_voice()) {
+        s_turn.says0 = v->says();
+    }
+#endif
     memset(s_marks, 0, sizeof(s_marks));
     s_reply_shown[0] = '\0';
     s_turn.start_us = now_us();
@@ -1164,8 +1217,13 @@ static bool open_note(void)
     if (!s_turn.chat_id) {
         return false;
     }
-    s_turn.body_sent = sizeof(MUSE_HATCH_NOTE_HEAD) - 1;
-    if (!send_body(s_turn.chat_id, reinterpret_cast<const uint8_t *>(MUSE_HATCH_NOTE_HEAD), sizeof(MUSE_HATCH_NOTE_HEAD) - 1, false)) {
+    /* museStopWatch: a side chat's session_id goes first in the note's JSON. */
+    char id[37], head[sizeof(MUSE_HATCH_NOTE_HEAD) + 64];
+    msw_session(id);
+    size_t head_len = id[0] ? (size_t)snprintf(head, sizeof(head), "{\"session_id\":\"%s\",%s", id, MUSE_HATCH_NOTE_HEAD + 1)
+                            : strlcpy(head, MUSE_HATCH_NOTE_HEAD, sizeof(head));
+    s_turn.body_sent = head_len;
+    if (!send_body(s_turn.chat_id, reinterpret_cast<const uint8_t *>(head), head_len, false)) {
         return false;
     }
     muse_hatch_wav_header(s_turn.note, MIC_RATE);
@@ -1223,6 +1281,11 @@ static void send_chat(const char *text, const char *modality, bool spoken)
     cJSON_AddStringToObject(body, "output_modality", modality);
     if (spoken) {
         cJSON_AddStringToObject(body, "device", MUSE_CHAT_SPOKEN_DEVICE);
+    }
+    char id[37];
+    msw_session(id);
+    if (id[0]) {
+        cJSON_AddStringToObject(body, "session_id", id);   /* museStopWatch: side chat */
     }
     char *json = cJSON_PrintUnformatted(body);
     cJSON_Delete(body);
@@ -1358,6 +1421,7 @@ static int bind_msg(const char *id, cJSON *payload)
     }
     /* Once the ack names our message, replies to anything else are someone else's. */
     if (parent && parent[0] && s_turn.acked && !is_user_id(parent) && find_msg(parent) < 0) {
+        ESP_LOGW(TAG, "message %.8s ignored: replies to %.8s, not to ours (%.8s)", id, parent, s_turn.user_ids[0]);
         muse_chat_reject(&s_turn.rejected, id);
         return -1;
     }
@@ -1499,11 +1563,20 @@ static void on_event(cJSON *line)
         }
         s_last_seq = v > s_last_seq ? v : s_last_seq;
     }
+    const char *event = cJSON_GetStringValue(cJSON_GetObjectItem(line, "event")) ?: "";
+    cJSON *payload = cJSON_GetObjectItem(line, "payload");
+    if (strcmp(event, "delta.text_append") != 0) {   /* museStopWatch: diagnosing missed replies */
+        const char *pid = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "reply_to_message_id"));
+        if (!pid) {
+            pid = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "parent_message_id"));
+        }
+        const char *sid = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "session_id"));
+        ESP_LOGI(TAG, "event %s phase=%d msg=%.8s parent=%.8s session=%.8s", event, (int)s_turn.phase,
+                 msg_id(payload, line) ?: "-", pid ?: "-", sid ?: "-");
+    }
     if (s_turn.phase != P_WAIT_REPLY) {
         return;
     }
-    const char *event = cJSON_GetStringValue(cJSON_GetObjectItem(line, "event")) ?: "";
-    cJSON *payload = cJSON_GetObjectItem(line, "payload");
 
     if (!strcmp(event, "agent.status") || !strcmp(event, "task.status")) {
         const char *code = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "activity_code"));
@@ -1609,6 +1682,31 @@ static void start_tts(void)
          * and finishes the message once it's drained.
          */
         m.pcm_start = s_turn.pcm_out;
+        /* museStopWatch: a running mini app may want the reply's text. */
+        if (msw_app_muse_reply) {
+            msw_app_muse_reply(s_turn.texts ? s_turn.texts + i * TEXT_MAX : m.tail);
+        }
+#if MSW_REPLY_VOICE
+        /* museStopWatch: speak it with the local voice. A say from Muse
+         * (voice.say) during the turn takes the place of the replies: its
+         * audio plays here if it's still to come, and no reply is spoken. */
+        if (const muse_reply_voice_t *v = muse_reply_voice(); v && !s_turn.text) {
+            bool said = v->says() != s_turn.says0;
+            const char *text = s_turn.texts ? s_turn.texts + i * TEXT_MAX : m.tail;
+            if (said ? v->say_live() : v->start(text)) {
+                m.pcm_frames = 0;
+                m.tts = TTS_ACTIVE;
+                s_turn.tts_msg = i;
+                s_turn.silent = false;
+                s_turn.local = true;
+                mark(M_TTS);
+                ESP_LOGI(TAG, "speaking message %s (%u chars)%s", m.id, (unsigned)m.len,
+                         said ? ": Muse's say in its place" : "");
+                show_reply_start(m);
+                return;
+            }
+        }
+#endif
         /* Paced to the text kept: a reply longer than CAPTION_TEXT shows what
          * was kept at reading pace, not stretched over the whole reply's time
          * (the Watcher keeps the rest for review). */
@@ -1677,6 +1775,28 @@ static void decode(void)
         pace_silently();
         return;
     }
+#if MSW_REPLY_VOICE
+    if (s_turn.local) {
+        const muse_reply_voice_t *v = muse_reply_voice();
+        msg_t &m = s_turn.msgs[s_turn.tts_msg];
+        int n = v ? 0 : -1;
+        while (v && xStreamBufferSpacesAvailable(s_out) >= 256 * sizeof(int16_t) &&
+               (n = v->read(s_pcm16, 256)) > 0) {
+            if (s_turn.gen == s_gen.load()) {
+                mark(M_AUDIO);
+                xStreamBufferSend(s_out, s_pcm16, n * sizeof(int16_t), 0);
+            }
+            s_turn.pcm_out += n;
+        }
+        if (n < 0) {
+            m.pcm_frames = s_turn.pcm_out - m.pcm_start;
+            m.tts = TTS_FINISHED;
+            s_turn.tts_msg = -1;
+            s_turn.local = false;
+        }
+        return;
+    }
+#endif
     /*
      * minimp3 only takes a frame once it can see the next one's header. Given
      * less, it resets and says to skip all of it, which drops speech and clicks.
@@ -1863,9 +1983,19 @@ static void stream_data(stream_t *s, ConstByteSpan data)
 static bool stream_end(stream_t *s, bool ok)
 {
     switch (s->kind) {
-    case K_SUB:
+    case K_SUB: {
+        char id[37];
+        msw_session(id);
+        if (s->status == 404 && id[0]) {   /* museStopWatch: a side chat not made yet */
+            ESP_LOGI(TAG, "side chat %.8s is new: subscribing after its first message", id);
+            close_stream(s);
+            s_conn.sub_id = 0;
+            s_sub_wait = true;
+            return true;
+        }
         ESP_LOGW(TAG, "subscription ended");
         return false;
+    }
     case K_DICT:
         close_stream(s);
         on_dictation_end(ok);
@@ -1876,6 +2006,9 @@ static bool stream_end(stream_t *s, bool ok)
         }
         close_stream(s);
         s_turn.chat_id = 0;
+        if (ok && s_sub_wait && !open_subscription()) {   /* museStopWatch: the side chat exists now */
+            return false;
+        }
         if (!ok) {
             turn_fail("MUSE DIDN'T TAKE IT");
         }
@@ -2072,6 +2205,14 @@ static void handle(const cmd_t &cmd)
         break;
     case CMD_WAKE:   /* only ends hatch_task's resting wait */
         break;
+    case CMD_SESSION:   /* museStopWatch: a new side chat; the VM stays known */
+        if (s_turn.phase != P_IDLE) {
+            turn_fail("SETTINGS CHANGED");
+        }
+        disconnect("side chat changed");
+        s_auto_next_us = 0;
+        s_auto_backoff_us = AUTO_RETRY_MIN_US;
+        break;
     }
 }
 
@@ -2231,6 +2372,36 @@ extern "C" void muse_hatch_chat_connect(void)
 extern "C" void muse_hatch_chat_forget(void)
 {
     post(CMD_FORGET, 0);
+}
+
+/* museStopWatch: the side chat, a lowercase UUID, or empty for the main chat.
+ * A change reconnects (CMD_SESSION) so the subscription follows it. */
+extern "C" bool muse_hatch_set_session_id(const char *id)
+{
+    if (!id) {
+        return false;
+    }
+    size_t len = strlen(id);
+    if (len && len != 36) {
+        return false;
+    }
+    for (size_t i = 0; i < len; ++i) {
+        bool dash = i == 8 || i == 13 || i == 18 || i == 23;
+        char c = id[i];
+        if (dash ? c != '-' : !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
+            return false;
+        }
+    }
+    portENTER_CRITICAL(&s_msw_lock);
+    bool changed = strcmp(s_msw_session, id) != 0;
+    if (changed) {
+        strlcpy(s_msw_session, id, sizeof(s_msw_session));
+    }
+    portEXIT_CRITICAL(&s_msw_lock);
+    if (changed) {
+        post(CMD_SESSION, 0);
+    }
+    return true;
 }
 
 extern "C" bool muse_hatch_ready(void)

@@ -1,0 +1,35 @@
+# museStopWatch: partitions_muse.csv plus the sanoTTS-jp model and dictionary.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Name,    Type, SubType, Offset,   Size,    Flags
+# Boards with the full UI (16 MB+ flash). Same geometry rules as partitions.csv: the table
+# sits at 0x10000 and the app slots are dual-OTA with rollback. Link plus the
+# UI, audio and Hatch client needs more than 2 MB per slot, and NVS also
+# holds Muse settings and BLE bonds, so both are larger. prod_data/prod_bak
+# follow the app slots; these boards have no factory product parameters.
+nvs,       data, nvs,     0x11000,  0xC000,
+otadata,   data, ota,     0x1D000,  0x2000,
+phy_init,  data, phy,     0x1F000,  0x1000,
+ota_0,     app,  ota_0,   0x20000,  4M,
+ota_1,     app,  ota_1,   0x420000, 4M,
+prod_data, data, 0x40,    0x820000, 0x1000,
+prod_bak,  data, 0x41,    0x821000, 0x1000,
+# museStopWatch: sanoTTS-jp (local Japanese TTS). Model and dictionary are read in
+# place (esp_partition_mmap), so they sit apart from the app slots and survive OTA.
+# Offsets on 64 KB boundaries (mmap pages). Subtypes 0x50/0x51 are our own.
+sano_model, data, 0x50,  0x830000, 0xC0000,
+sano_dict,  data, 0x51,  0x8F0000, 0x100000,
+# museStopWatch: mini apps (components/miniapp), a FAT volume mounted at /apps.
+apps,       data, fat,   0x9F0000, 0x400000,

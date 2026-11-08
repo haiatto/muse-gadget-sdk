@@ -291,3 +291,13 @@ void muse_wifi_forget(const char *ssid)
         s_ops->wifi_forget(ssid);
     }
 }
+
+/* museStopWatch */
+bool muse_wifi_choose(const char *ssid)
+{
+    if (!s_ops || !s_ops->wifi_choose || !ssid || !ssid[0]) {
+        return false;
+    }
+    s_ops->wifi_choose(ssid);
+    return true;
+}

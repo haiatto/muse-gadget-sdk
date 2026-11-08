@@ -35,6 +35,7 @@
 #include "lwip/lwip_napt.h"
 
 #include "noise_tunnel.h"
+#include "msw_stack.h"   /* museStopWatch: PSRAM task stacks */
 
 static const char *TAG = "link.tun";
 
@@ -307,7 +308,7 @@ bool tunnel_netif_start(const ip4_addr_t *ip,
         xQueueSend(s_tx_free_queue, &p, 0);
     }
     if (!s_tx_task
-        && xTaskCreate(tx_task, "tun_tx", TX_TASK_STACK, NULL, TX_TASK_PRIO,
+        && msw_task_create(tx_task, "tun_tx", TX_TASK_STACK, NULL, TX_TASK_PRIO,
                        &s_tx_task) != pdPASS) {
         ESP_LOGE(TAG, "xTaskCreate failed");
         return false;

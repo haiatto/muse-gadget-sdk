@@ -86,3 +86,6 @@ int muse_wifi_scan_results(muse_wifi_ap_t *out, int max, uint32_t *gen);
 int muse_wifi_saved(muse_wifi_saved_t *out, int max);
 /* Forgets one saved network, disconnecting first if it's the one in use. */
 void muse_wifi_forget(const char *ssid);
+/* museStopWatch: switches to a saved network with the password saved for it
+ * (it goes first, as a network chosen with its password does). */
+bool muse_wifi_choose(const char *ssid);

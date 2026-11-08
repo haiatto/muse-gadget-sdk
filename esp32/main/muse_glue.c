@@ -41,6 +41,7 @@
 #include "muse_ble.h"
 #include "muse_board.h"
 #include "muse_input.h"
+#include "msw_stack.h"   /* museStopWatch: PSRAM task stacks */
 #include "muse_link.h"
 #include "muse_mem.h"
 #include "muse_settings.h"
@@ -60,6 +61,7 @@ static const char *TAG = "link.muse";
 #define KEEP_SAVE       BIT2    // remember s_ssid/s_pass first
 #define KEEP_RELOAD     BIT3    // Link may have changed the saved networks
 #define KEEP_FORGET     BIT4    // forget the networks marked in s_saved
+#define KEEP_CHOOSE     BIT5    // museStopWatch: join s_choose with its saved password
 
 #define CONNECT_TIMEOUT_MS 20000
 #define RETRY_MIN_US (5LL * 1000 * 1000)
@@ -299,6 +301,40 @@ static void op_wifi_forget(const char *ssid) {
     if (found) keeper_kick(KEEP_FORGET);
 }
 
+// museStopWatch: a saved network tapped in the list. The keeper reads its
+// password from NVS (this may run on a PSRAM stack) and sets it as chosen.
+static char s_choose[MUSE_SSID_MAX + 1];
+
+static void op_wifi_choose(const char *ssid) {
+    portENTER_CRITICAL(&s_lock);
+    strlcpy(s_choose, ssid, sizeof(s_choose));
+    portEXIT_CRITICAL(&s_lock);
+    keeper_kick(KEEP_CHOOSE);
+}
+
+static void choose_saved(void) {
+    char ssid[MUSE_SSID_MAX + 1];
+    portENTER_CRITICAL(&s_lock);
+    strlcpy(ssid, s_choose, sizeof(ssid));
+    s_choose[0] = '\0';
+    portEXIT_CRITICAL(&s_lock);
+    if (!ssid[0]) return;
+    wifi_known_list_t *list = malloc(sizeof(*list));
+    if (!list) return;
+    int n = wifi_known_load(list);
+    bool found = false;
+    for (int i = 0; i < n; i++) {
+        if (strcmp(list->nets[i].ssid, ssid) == 0) {
+            op_wifi_set(list->nets[i].ssid, list->nets[i].password);
+            found = true;
+            break;
+        }
+    }
+    wifi_known_wipe(list);
+    free(list);
+    ESP_LOGI(TAG, "%s a saved network%s", found ? "switching to" : "couldn't find", found ? "" : " to switch to");
+}
+
 // Whether ssid is a saved network. Call with s_lock held.
 static bool saved_locked(const char *ssid) {
     for (int i = 0; i < s_saved_count; i++) {
@@ -424,6 +460,7 @@ static const muse_link_ops_t s_ops = {
     .ble_quiet = ble_server_set_quiet,
     .wifi_saved = op_wifi_saved,
     .wifi_forget = op_wifi_forget,
+    .wifi_choose = op_wifi_choose,   // museStopWatch
 };
 
 // ---- Keeper: joins a saved network and applies BLE, on an internal stack ----
@@ -510,6 +547,9 @@ static void keeper_task(void *arg) {
     stack_monitor_t stack = STACK_MONITOR_INIT;
 
     for (;;) {
+        if (pending & KEEP_CHOOSE) {
+            choose_saved();   // sets it as chosen and kicks KEEP_SAVE
+        }
         if (pending & (KEEP_SAVE | KEEP_FORGET)) {
             save_saved(pending, &next_try);
             reload_creds(&joined_gen);
@@ -660,7 +700,7 @@ void muse_glue_start(void) {
     // Pinned to the UI core, so the display's SPI interrupt, set up in it,
     // lands beside the task that sends to the display (muse_lcd_bands.h).
     if (xTaskCreatePinnedToCore(boot_task, "muse_boot", 8192, NULL, 5, NULL, MUSE_UI_CORE) != pdPASS
-        || xTaskCreate(keeper_task, "muse_keep", 6144, NULL, 4, &s_keeper) != pdPASS) {
+        || msw_task_create(keeper_task, "muse_keep", 6144, NULL, 4, &s_keeper) != pdPASS) {
         ESP_LOGE(TAG, "failed to start Muse tasks");
     }
 }

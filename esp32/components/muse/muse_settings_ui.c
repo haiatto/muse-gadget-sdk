@@ -42,6 +42,7 @@
 #include "muse_ui.h"
 #include "muse_voice.h"
 #include "muse_wifi.h"
+#include "msw_text.h"   /* museStopWatch */
 #if CONFIG_MUSE_VIDEO
 #include "muse_video.h"
 #endif
@@ -80,6 +81,11 @@ static bool s_tiny;   /* round and under 300 px: see TINY_LIST_W */
 static lv_obj_t *s_tile;
 static lv_obj_t *s_current;
 static lv_obj_t *s_home, *s_wifi, *s_hatch, *s_ble, *s_sound, *s_sleep, *s_battery, *s_power, *s_text;
+/* museStopWatch: the QR pages (msw_settings_qr.inc) */
+static void msw_forget_page(lv_obj_t *p);
+static bool msw_go_back(void);
+static void msw_tick_qr(void);
+static bool msw_saved_gesture(void);   /* msw_wifi_saved.inc */
 
 /*
  * Only home is kept. A sub-page is built when it opens and deleted on the way
@@ -203,16 +209,17 @@ static lv_obj_t *label(lv_obj_t *parent, const lv_font_t *font, uint32_t color, 
 {
     char shown[SHOWN_MAX];
     lv_obj_t *l = lv_label_create(parent);
-    lv_obj_set_style_text_font(l, settings_font(font), 0);
+    font = msw_font_cjk(settings_font(font));   /* museStopWatch: Japanese and SSIDs */
+    lv_obj_set_style_text_font(l, font, 0);
     lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
-    lv_label_set_text(l, muse_text_showable(text, shown, sizeof(shown)));
+    lv_label_set_text(l, msw_text_showable(font, text, shown, sizeof(shown)));
     return l;
 }
 
 static void set_text(lv_obj_t *l, const char *text)
 {
     char shown[SHOWN_MAX];
-    text = muse_text_showable(text, shown, sizeof(shown));
+    text = msw_text_showable(lv_obj_get_style_text_font(l, 0), text, shown, sizeof(shown));
     if (strcmp(lv_label_get_text(l), text) != 0) {
         lv_label_set_text(l, text);
     }
@@ -235,6 +242,9 @@ static void on_gesture(lv_event_t *e)
     /* Dragging a slider right isn't a "back" swipe. */
     lv_obj_t *pressed = lv_indev_get_active_obj();
     if (pressed && lv_obj_check_type(pressed, &lv_slider_class)) {
+        return;
+    }
+    if (msw_saved_gesture()) {   /* museStopWatch: a saved network's x */
         return;
     }
     if (lv_indev_get_gesture_dir(lv_indev_active()) == LV_DIR_RIGHT) {
@@ -507,6 +517,7 @@ static lv_obj_t *info_row(lv_obj_t *list, const char *text)
 
 static void drop(lv_obj_t *p)
 {
+    msw_forget_page(p);   /* museStopWatch: before the pointers below are cleared */
     lv_obj_t **const pages[] = { &s_wifi, &s_hatch, &s_ble, &s_sound, &s_sleep, &s_battery, &s_power, &s_text };
     for (size_t i = 0; i < sizeof(pages) / sizeof(pages[0]); i++) {
         if (*pages[i] == p) {
@@ -546,6 +557,8 @@ static void go_back(void)
 {
     if (s_current == s_text) {
         close_text();
+    } else if (msw_go_back()) {
+        return;
     } else if (s_current != s_home) {
         show(s_home);
     }
@@ -713,7 +726,7 @@ static void build_text_page(lv_obj_t *tile)
     s_text_ta = lv_textarea_create(s_text);
     lv_textarea_set_one_line(s_text_ta, true);
     lv_obj_set_size(s_text_ta, text_field_w(), h);
-    lv_obj_set_style_text_font(s_text_ta, display_font, 0);
+    lv_obj_set_style_text_font(s_text_ta, msw_font_cjk(display_font), 0);   /* museStopWatch: Japanese hints */
     lv_obj_set_style_pad_ver(s_text_ta, pad > 0 ? pad : 0, 0);
     lv_obj_set_style_pad_hor(s_text_ta, 14, 0);
     lv_obj_set_style_bg_color(s_text_ta, lv_color_hex(COLOR_CARD), 0);
@@ -872,6 +885,9 @@ static void on_wifi_saved(lv_event_t *e)
     s_forget_armed_us = now;
 }
 
+#include "msw_side_ui.inc"      /* museStopWatch: side chats, confirm dialog */
+#include "msw_wifi_saved.inc"   /* museStopWatch */
+
 static bool same_saved(const muse_wifi_saved_t *a, int n)
 {
     if (n != s_saved_n) {
@@ -896,12 +912,13 @@ static void rebuild_saved_list(void)
     s_saved_n = n;
     s_forget_armed = -1;
     s_shown_scan_gen = UINT32_MAX;   /* re-mark the saved ones in the scan list */
+    msw_saved_reset();
     lv_obj_clean(s_wifi_saved);
     if (n) {
-        note(s_wifi_saved, "Saved networks");
+        note(s_wifi_saved, "保存済み");
     }
     for (int i = 0; i < n; i++) {
-        row(s_wifi_saved, LV_SYMBOL_WIFI, saved[i].ssid, &s_saved_vals[i], on_wifi_saved, (void *)(intptr_t)i);
+        msw_saved_row(s_wifi_saved, i, saved[i].ssid);   /* museStopWatch: tap joins, x forgets */
     }
 }
 
@@ -913,10 +930,7 @@ static void tick_saved_list(const muse_wifi_status_t *w)
     for (int i = 0; i < s_saved_n; i++) {
         const char *text = "";
         uint32_t color = COLOR_DIM;
-        if (i == s_forget_armed) {
-            text = "Tap to forget";
-            color = COLOR_DANGER;
-        } else if (w->state == MUSE_WIFI_CONNECTED && !strcmp(w->ssid, s_saved[i].ssid)) {
+        if (w->state == MUSE_WIFI_CONNECTED && !strcmp(w->ssid, s_saved[i].ssid)) {
             text = "Connected";
             color = COLOR_OK;
         } else if (s_saved[i].hidden) {
@@ -952,7 +966,7 @@ static bool rebuild_scan_list(void)
         lv_label_set_text(v, buf);
     }
     if (gen && !n) {
-        note(s_wifi_list, "No networks found");
+        note(s_wifi_list, "ネットワークが見つかりません");
     }
     return fresh && saved_seen;
 }
@@ -995,8 +1009,9 @@ static void build_wifi_page(lv_obj_t *tile)
         snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X", m[0], m[1], m[2], m[3], m[4], m[5]);
         lv_label_set_text(mac, buf);
     }
-    note(list, "Muse remembers up to 8 networks and joins the strongest one in range. Tap a saved one twice to "
-               "forget it.");
+    /* museStopWatch */
+    note(list, "保存は 8 件まで。前回つないだネットワークを優先し、見つからなければ電波の強い順につなぎます。"
+               "保存済みをタップでつなぎ替え、左にスワイプか長押しで削除できます。");
 }
 
 static void tick_wifi(void)
@@ -1006,27 +1021,27 @@ static void tick_wifi(void)
     char buf[128];
     switch (w.state) {
     case MUSE_WIFI_OFF:
-        strlcpy(buf, "Wi-Fi is off", sizeof(buf));
+        strlcpy(buf, "Wi-Fi はオフです", sizeof(buf));
         break;
     case MUSE_WIFI_NO_NETWORK:
-        strlcpy(buf, "No saved networks. Scan and pick one.", sizeof(buf));
+        strlcpy(buf, "保存したネットワークがありません。探して選んでください。", sizeof(buf));
         break;
     case MUSE_WIFI_CONNECTING:
-        snprintf(buf, sizeof(buf), "Joining %s\n%s", w.ssid, w.detail);
+        snprintf(buf, sizeof(buf), "%s に接続中\n%s", w.ssid, w.detail);
         break;
     case MUSE_WIFI_CONNECTED:
         if (muse_board->epaper) {
-            snprintf(buf, sizeof(buf), "Connected to %s\n%s", w.ssid, w.ip);
+            snprintf(buf, sizeof(buf), "%s に接続済み\n%s", w.ssid, w.ip);
         } else {
-            snprintf(buf, sizeof(buf), "Connected to %s\n%s  -  %d dBm", w.ssid, w.ip, w.rssi);
+            snprintf(buf, sizeof(buf), "%s に接続済み\n%s  -  %d dBm", w.ssid, w.ip, w.rssi);
         }
         break;
     case MUSE_WIFI_NOT_NEARBY:
-        strlcpy(buf, "No saved network nearby\nLooking again within a minute", sizeof(buf));
+        strlcpy(buf, "保存したネットワークが近くにありません\n1 分以内にもう一度探します", sizeof(buf));
         break;
     case MUSE_WIFI_FAILED:
     default:
-        snprintf(buf, sizeof(buf), "Couldn't join %s\n%s", w.ssid, w.detail);
+        snprintf(buf, sizeof(buf), "%s に接続できませんでした\n%s", w.ssid, w.detail);
         break;
     }
     set_text(s_wifi_status, buf);
@@ -1071,7 +1086,7 @@ static void on_hatch_sdk_token_done(const char *text)
 static void on_hatch_sdk_token(lv_event_t *e)
 {
     (void)e;
-    open_text("SDK token", "", true, 48 /* mgst_ and 43 more */, "Empty keeps the current one; a new one restarts",
+    open_text("SDK token", "", true, 48 /* mgst_ and 43 more */, "空欄で変更なし・入力で再起動",
               on_hatch_sdk_token_done, s_hatch);
 }
 
@@ -1080,7 +1095,7 @@ static void on_hatch_host(lv_event_t *e)
     (void)e;
     char host[MUSE_HOST_MAX + 1];
     muse_settings_hatch_host(host);
-    open_text("Muse server", host, false, MUSE_HOST_MAX, "Empty for the default", on_hatch_host_done, s_hatch);
+    open_text("Muse server", host, false, MUSE_HOST_MAX, "空欄で標準", on_hatch_host_done, s_hatch);
 }
 
 static void on_hatch_vm(lv_event_t *e)
@@ -1088,13 +1103,13 @@ static void on_hatch_vm(lv_event_t *e)
     (void)e;
     char vm[MUSE_VM_MAX + 1];
     muse_settings_hatch_vm(vm);
-    open_text("VM ID", vm, false, MUSE_VM_MAX, "Optional", on_hatch_vm_done, s_hatch);
+    open_text("VM ID", vm, false, MUSE_VM_MAX, "省略可", on_hatch_vm_done, s_hatch);
 }
 
 static void on_hatch_token(lv_event_t *e)
 {
     (void)e;
-    open_text("Device token", "", true, MUSE_TOKEN_MAX, "Empty keeps the current one", on_hatch_token_done, s_hatch);
+    open_text("Device token", "", true, MUSE_TOKEN_MAX, "空欄で変更なし", on_hatch_token_done, s_hatch);
 }
 
 static void on_hatch_test(lv_event_t *e)
@@ -1109,12 +1124,12 @@ static void on_link_reset(lv_event_t *e)
     (void)e;
     int64_t now = esp_timer_get_time();
     if (s_link_reset_armed_us && now - s_link_reset_armed_us < 5000000) {
-        set_text(s_link_reset_lbl, "Resetting...");
+        set_text(s_link_reset_lbl, "リセット中…");
         muse_link_reset_setup();
         return;
     }
     s_link_reset_armed_us = now;
-    set_text(s_link_reset_lbl, "Tap again to reset");
+    set_text(s_link_reset_lbl, "もう一度タップでリセット");
 }
 
 static void build_hatch_page(lv_obj_t *tile)
@@ -1130,19 +1145,20 @@ static void build_hatch_page(lv_obj_t *tile)
     row(list, NULL, "Device token", &s_hatch_token, on_hatch_token, NULL);
     row(list, NULL, "SDK token", &s_hatch_sdk_token, on_hatch_sdk_token, NULL);
     button(list, "Test connection", COLOR_ACCENT, on_hatch_test, NULL);
-    note(list, "Pair with the Muse app to use your account; a device token here overrides it, and a long one is "
-               "easier to send over Bluetooth. The VM ID picks one of your VMs. The SDK token is from "
-               "gadgets.muse.ai; one set here replaces the firmware's. "
-               "Reset pairing forgets Wi-Fi and the app pairing, then restarts.");
+    row(list, LV_SYMBOL_LIST, "Side chat", &s_hatch_side, on_nav, (void *)&MSW_SIDE);   /* museStopWatch */
+    note(list, "Muse アプリとペアリングすると、あなたのアカウントで使えます。ここで入れたデバイストークンはペアリングより優先されます"
+               "（長いものは Bluetooth から送ると楽です）。VM ID はどの VM を使うかを選びます（空欄なら既定の VM）。"
+               "SDK トークンは gadgets.muse.ai で発行したもので、ここで入れるとファームに入っているものの代わりに使います。"
+               "Reset pairing は Wi-Fi とアプリのペアリングを消して再起動します。");
 }
 
 static void tick_hatch(void)
 {
-    char link[96];
-    const char *paired = !muse_link_hatch_linked()    ? "not paired"
-                         : muse_link_sdk_token_changed() ? "paired with another SDK token, pair again to use this one"
-                                                         : "paired";
-    snprintf(link, sizeof(link), "Muse app: %s\n%s", paired, muse_link_state_name(muse_link_state()));
+    char link[192];   /* museStopWatch: Japanese is longer */
+    const char *paired = !muse_link_hatch_linked()    ? "未ペアリング"
+                         : muse_link_sdk_token_changed() ? "別の SDK トークンでペアリング済み。使うにはペアリングし直してください"
+                                                         : "ペアリング済み";
+    snprintf(link, sizeof(link), "Muse アプリ: %s\n%s", paired, muse_link_state_name(muse_link_state()));
     set_text(s_link_status, link);
     if (s_link_reset_armed_us && esp_timer_get_time() - s_link_reset_armed_us >= 5000000) {
         s_link_reset_armed_us = 0;
@@ -1182,6 +1198,7 @@ static void tick_hatch(void)
         s_sdk_token_bad_us = 0;
         set_text(s_hatch_sdk_token, sdk ? buf : "Not set");
     }
+    msw_tick_hatch_side();   /* museStopWatch */
 }
 
 /* ---------- Bluetooth ---------- */
@@ -1204,8 +1221,8 @@ static void build_ble_page(lv_obj_t *tile)
     s_ble_sw = switch_row(list, "Phone setup", muse_settings_ble_on(), on_ble_sw);
     s_ble_status = note(list, "");
     button(list, "Forget paired phones", COLOR_DANGER, on_ble_forget, NULL);
-    note(list, "When on, Muse is visible to phones nearby. Open tools/ble_setup.html in Chrome, "
-               "connect, and enter the code Muse shows to pair.");
+    note(list, "オンにすると、近くのスマホから見えるようになります。Chrome で tools/ble_setup.html を開いて接続し、"
+               "画面に出るコードを入れるとペアリングできます。");
 }
 
 static void tick_ble(void)
@@ -1215,14 +1232,14 @@ static void tick_ble(void)
     char buf[96];
     switch (b.state) {
     case MUSE_BLE_OFF:
-        strlcpy(buf, "Off", sizeof(buf));
+        strlcpy(buf, "オフ", sizeof(buf));
         break;
     case MUSE_BLE_ADVERTISING:
-        snprintf(buf, sizeof(buf), "Visible as %s", b.name);
+        snprintf(buf, sizeof(buf), "%s として公開中", b.name);
         break;
     case MUSE_BLE_CONNECTED:
     default:
-        snprintf(buf, sizeof(buf), "Phone connected\n%s", b.secure ? "Paired" : "Waiting for pairing");
+        snprintf(buf, sizeof(buf), "スマホが接続中\n%s", b.secure ? "ペアリング済み" : "ペアリング待ち");
         break;
     }
     set_text(s_ble_status, buf);
@@ -1301,8 +1318,8 @@ static void build_sound_page(lv_obj_t *tile)
     s_sound = page(tile, "SOUND", true, &list);
 #if CONFIG_MUSE_BOARD_M5STACK_STOPWATCH && CONFIG_MUSE_REALTIME_VOICE
     s_notes_sw = switch_row(list, "Voice notes", muse_settings_voice_notes(), on_notes_sw);
-    note(list, "Off: hold yellow to talk live, release to listen; blue ends the call. "
-               "On: hold yellow to send a voice note. Applies to the next call.");
+    note(list, "オフ: 黄色を押している間はリアルタイムで話し、離すと聞きます。青で通話を終えます。"
+               "オン: 黄色を押している間の声を音声メモとして送ります。次の通話から反映されます。");
 #endif
     if (muse_board->audio_init) {
         s_spk_sw = switch_row(list, "Speaker", muse_settings_speaker_on(), on_speaker_sw);
@@ -1328,7 +1345,7 @@ static void build_sound_page(lv_obj_t *tile)
     if (muse_board->epaper) {
         lv_obj_add_flag(meter, LV_OBJ_FLAG_HIDDEN);
     } else {
-        note(list, "Talk at arm's length: the bar should reach green (-30 to -15 dBFS) without going orange.");
+        note(list, "腕を伸ばした距離で話して、バーが緑（-30〜-15 dBFS）に届き、オレンジにならなければ適正です。");
     }
 
     if (!muse_board->epaper) {
@@ -1383,14 +1400,14 @@ static void build_sleep_page(lv_obj_t *tile)
     lv_obj_t *list;
     s_sleep = page(tile, "AUTO-SLEEP", true, &list);
     s_sleep_shown = -1;
-    note(list, "Turn the screen off after Muse has been idle for:");
+    note(list, "操作がない状態が次の時間続いたら画面を消します:");
     for (int i = 0; i < SLEEP_COUNT; i++) {
         s_sleep_rows[i] = row(list, NULL, SLEEP_NAMES[i], &s_sleep_checks[i], on_sleep_choice,
                               (void *)(intptr_t)i);
         lv_obj_set_style_text_color(s_sleep_checks[i], lv_color_hex(COLOR_ACCENT), 0);
     }
     button(list, LV_SYMBOL_EYE_CLOSE "  Sleep now", COLOR_ACCENT, on_sleep_now, NULL);
-    note(list, "Tap the screen or press either button to wake.");
+    note(list, "画面をタップするか、どちらかのボタンを押すと戻ります。");
 }
 
 static const char *sleep_name(int secs)
@@ -1431,17 +1448,18 @@ static void build_battery_page(lv_obj_t *tile)
     s_battery = page(tile, "BATTERY", true, &list);
     s_batt_shown_us = 0;
     s_batt_status = note(list, "");
-    s_batt_level = info_row(list, "Battery");
-    s_batt_drain = info_row(list, "Used");
-    s_batt_full = info_row(list, "A full charge");
-    s_batt_off = info_row(list, "Screen off");
-    s_batt_slept = info_row(list, "Chip asleep");
-    s_batt_wakes = info_row(list, "Wakes");
-    s_batt_busy = info_row(list, "CPU busy");
+    s_batt_level = info_row(list, "残量");   /* museStopWatch: Japanese */
+    s_batt_drain = info_row(list, "使った量");
+    s_batt_full = info_row(list, "満充電で");
+    s_batt_off = info_row(list, "画面オフ");
+    s_batt_slept = info_row(list, "チップ休止");
+    s_batt_wakes = info_row(list, "起きた回数");
+    s_batt_busy = info_row(list, "CPU 稼働");
     s_batt_awake = note(list, "");
-    button(list, LV_SYMBOL_REFRESH "  Start over", COLOR_ACCENT, on_battery_reset, NULL);
-    note(list, "Measures from unplugging USB until it's plugged back in. The gauge moves in 1% steps, so give it a "
-               "few hours. Chip asleep is time in light sleep; CPU busy is time a core was running a task.");
+    button(list, LV_SYMBOL_REFRESH "  測り直す", COLOR_ACCENT, on_battery_reset, NULL);
+    note(list, "USB を抜いてから挿し直すまでを測ります。残量は 1% 刻みなので、数時間測ってください。"
+               "画面オフ・チップ休止・CPU 稼働は、その状態だった時間の割合。"
+               "チップ休止は省電力の眠り（ライトスリープ）、CPU 稼働はどれかのコアが処理をしていた時間です。");
 }
 
 /* A per-mille figure as a percentage. */
@@ -1468,19 +1486,19 @@ static void tick_battery(void)
 
     int h = (int)(b.secs / 3600), m = (int)(b.secs / 60 % 60);
     if (h) {
-        snprintf(t, sizeof(t), "%d h %d min", h, m);
+        snprintf(t, sizeof(t), "%d 時間 %d 分", h, m);
     } else {
-        snprintf(t, sizeof(t), "%d min", m);
+        snprintf(t, sizeof(t), "%d 分", m);
     }
     if (!b.started) {
-        strlcpy(buf, p.battery_pct < 0 ? "No battery" : "Unplug USB to start measuring.", sizeof(buf));
+        strlcpy(buf, p.battery_pct < 0 ? "電池なし" : "USB を抜くと測定を始めます。", sizeof(buf));
     } else {
-        snprintf(buf, sizeof(buf), b.running ? "On battery for %s" : "Last run: %s on battery", t);
+        snprintf(buf, sizeof(buf), b.running ? "電池で %s 動作中" : "前回: 電池で %s 動作", t);
     }
     set_text(s_batt_status, buf);
 
     if (p.battery_pct < 0) {
-        strlcpy(buf, "None", sizeof(buf));
+        strlcpy(buf, "なし", sizeof(buf));
     } else if (p.battery_mv) {
         snprintf(buf, sizeof(buf), "%s%d%%  %d.%02d V", p.charging ? LV_SYMBOL_CHARGE " " : "", p.battery_pct,
                  p.battery_mv / 1000, p.battery_mv % 1000 / 10);
@@ -1496,12 +1514,12 @@ static void tick_battery(void)
     } else if (muse_battery_drain(&b, &rate10, &full_h)) {
         snprintf(buf, sizeof(buf), "%d%%, %d.%d%%/h", used, rate10 / 10, rate10 % 10);
         set_text(s_batt_drain, buf);
-        snprintf(buf, sizeof(buf), "lasts ~%d h", full_h);
+        snprintf(buf, sizeof(buf), "約 %d 時間", full_h);
         set_text(s_batt_full, buf);
     } else {
-        snprintf(buf, sizeof(buf), "%d%% so far", used > 0 ? used : 0);
+        snprintf(buf, sizeof(buf), "今のところ %d%%", used > 0 ? used : 0);
         set_text(s_batt_drain, buf);
-        set_text(s_batt_full, "measuring");
+        set_text(s_batt_full, "測定中");
     }
 
     set_pm(s_batt_off, b.started ? b.screen_off_pm : -1);
@@ -1509,14 +1527,14 @@ static void tick_battery(void)
     set_pm(s_batt_busy, b.started ? b.busy_pm : -1);
     if (b.started && b.secs && b.slept_pm >= 0) {
         int per10 = (int)(b.sleeps * 10LL / b.secs);
-        snprintf(buf, sizeof(buf), "%d.%d/s", per10 / 10, per10 % 10);
+        snprintf(buf, sizeof(buf), "%d.%d 回/秒", per10 / 10, per10 % 10);
         set_text(s_batt_wakes, buf);
     } else {
         set_text(s_batt_wakes, "-");
     }
     buf[0] = '\0';
     if (b.started && b.awake[0]) {
-        snprintf(buf, sizeof(buf), "Also kept awake by: %s", b.awake);
+        snprintf(buf, sizeof(buf), "ほかに眠りを妨げたもの: %s", b.awake);
     }
     set_text(s_batt_awake, buf);
 }
@@ -1535,7 +1553,7 @@ static void build_power_page(lv_obj_t *tile)
 {
     lv_obj_t *list;
     s_power = page(tile, "POWER", true, &list);
-    note(list, "Power Muse off completely?");
+    note(list, "電源を完全に切りますか？");
     button(list, LV_SYMBOL_POWER "  Power off", COLOR_DANGER, on_power_off, NULL);
     button(list, "Cancel", COLOR_TEXT, on_back, NULL);
     char text[128];
@@ -1543,16 +1561,18 @@ static void build_power_page(lv_obj_t *tile)
     const char *sleep = muse_board->power_button ? muse_board->power_button : muse_board->aux_button;
     if (power && !strcmp(power, "screen")) {
         /* Touch-only boards (the LCD-7 and LCD-1.28) wake on a tap. */
-        snprintf(text, sizeof(text), "Tap the screen to turn it back on.");
+        snprintf(text, sizeof(text), "画面をタップすると電源が入ります。");
     } else if (sleep) {
-        snprintf(text, sizeof(text), "Press the %s button to turn it back on. To just turn the screen off, press the %s button.",
+        snprintf(text, sizeof(text), "%s ボタンを押すと電源が入ります。画面だけを消すときは %s ボタンを押してください。",
                  power, sleep);
     } else {
         /* No button turns the screen off (the 1.85C's BOOT talks). */
-        snprintf(text, sizeof(text), "Press the %s button to turn it back on.", power);
+        snprintf(text, sizeof(text), "%s ボタンを押すと電源が入ります。", power);
     }
     note(list, text);
 }
+
+#include "msw_settings_qr.inc"   /* museStopWatch */
 
 /* ---------- Home ---------- */
 
@@ -1577,6 +1597,7 @@ static void build_home(lv_obj_t *tile)
 {
     lv_obj_t *list;
     s_home = page(tile, "SETTINGS", false, &list);
+    row(list, LV_SYMBOL_IMAGE, "QR", NULL, on_nav, (void *)&MSW_QR);   /* museStopWatch */
     row(list, LV_SYMBOL_WIFI, "Wi-Fi", &s_home_wifi, on_nav, (void *)&WIFI);
     row(list, LV_SYMBOL_HOME, "Muse", &s_home_hatch, on_nav, (void *)&HATCH);
     row(list, LV_SYMBOL_BLUETOOTH, "Bluetooth", &s_home_ble, on_nav, (void *)&BLE);
@@ -1652,6 +1673,8 @@ void muse_settings_ui_build(lv_obj_t *tile)
     }
     s_tiny = muse_board->round && muse_board->width < 300;
     s_tile = tile;
+    msw_web_autostart();   /* museStopWatch: the Web settings page is always there */
+    msw_side_init();       /* museStopWatch: talk in the side chat chosen last */
     build_home(tile);
     show(s_home);
 }
@@ -1722,6 +1745,8 @@ void muse_settings_ui_tick(bool visible)
         tick_sleep();
     } else if (s_current == s_battery) {
         tick_battery();
+    } else {
+        msw_tick_qr();   /* museStopWatch */
     }
 }
 

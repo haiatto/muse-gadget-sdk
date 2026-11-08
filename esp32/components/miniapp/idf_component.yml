@@ -1,0 +1,12 @@
+# museStopWatch mini apps (see CMakeLists.txt). Only the StopWatch builds them.
+dependencies:
+  espressif/elf_loader:
+    version: ">=2.1"
+    rules:
+      - if: '$CONFIG{MUSE_BOARD_ID} == "m5stack_stopwatch"'
+  espressif/cjson: "~1.7"
+  lvgl/lvgl:
+    version: "9.5.0"
+    public: true
+    rules:
+      - if: '$CONFIG{MUSE_BOARD_ID} == "m5stack_stopwatch"'

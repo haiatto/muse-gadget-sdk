@@ -78,6 +78,7 @@ typedef struct {
     void (*ble_quiet)(bool quiet);                /* a Wi-Fi video stream: no BLE advertising until false */
     int (*wifi_saved)(muse_wifi_saved_t *out, int max);   /* most recently joined first */
     void (*wifi_forget)(const char *ssid);        /* one saved network; empty forgets them all */
+    void (*wifi_choose)(const char *ssid);        /* museStopWatch: join a saved network with its saved password */
 } muse_link_ops_t;
 
 /* Pauses BLE advertising (setup's, or the companion's) while a Wi-Fi video

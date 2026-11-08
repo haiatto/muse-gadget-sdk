@@ -46,6 +46,7 @@
  * M5PM1 user manual (docs/ in M5PM1 be9a545: IRQ Status 1-3, BTN_CFG_1) and
  * M5Unified's ES8311 notes for the StopWatch (M5Unified.inl).
  */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -576,20 +577,56 @@ static void round_area(lv_event_t *e)
     a->y2 |= 1;
 }
 
-/* LVGL polls this from its own task. The CST820 reports one point. */
+/* LVGL polls this from its own task. The CST820 reports up to two fingers
+ * (the count at 0x02, then 6 bytes a finger from 0x03: event and X high, X
+ * low, id and Y high, Y low; event 0x40 = lifted), but it is self-capacitive:
+ * with two fingers it can lose a held one or report a ghost. So the screen is
+ * one-finger: LVGL (and msw_touch) get the first finger that is down.
+ * board_stopwatch_tp_dump(seconds) prints the raw registers 0x00..0x0F each
+ * time they change (console msw.tp). */
+#define TP_MAX_POINTS 2
+
+static volatile int64_t s_tp_dump_until;
+
+void board_stopwatch_tp_dump(int seconds)
+{
+    s_tp_dump_until = esp_timer_get_time() + (int64_t)seconds * 1000000;
+}
+
 static void tp_read(lv_indev_t *indev, lv_indev_data_t *data)
 {
     (void)indev;
-    uint8_t b[5];
-    if (reg_read(s_tp, TP_REG_POINTS, b, sizeof(b)) != ESP_OK || (b[0] & 0x0F) == 0) {
+    uint8_t raw[16];
+    const uint8_t *b = raw + TP_REG_POINTS;
+    if (reg_read(s_tp, 0x00, raw, sizeof(raw)) != ESP_OK) {
         data->state = LV_INDEV_STATE_RELEASED;
         return;
     }
-    int x = (b[1] & 0x0F) << 8 | b[2];
-    int y = (b[3] & 0x0F) << 8 | b[4];
-    data->point.x = x < LCD_RES ? x : LCD_RES - 1;
-    data->point.y = y < LCD_RES ? y : LCD_RES - 1;
-    data->state = LV_INDEV_STATE_PRESSED;
+    if (s_tp_dump_until && esp_timer_get_time() < s_tp_dump_until) {
+        static uint8_t last[16];
+        if (memcmp(last, raw, sizeof(raw))) {
+            memcpy(last, raw, sizeof(raw));
+            printf("@tp");
+            for (int i = 0; i < 16; i++) {
+                printf(" %02x", raw[i]);
+            }
+            putchar('\n');
+        }
+    }
+    int count = b[0] & 0x0F;
+    for (int i = 0; i < count && i < TP_MAX_POINTS; i++) {
+        const uint8_t *p = b + 1 + 6 * i;
+        if ((p[0] & 0xC0) == 0x40) {
+            continue;                       /* this finger was lifted */
+        }
+        int x = (p[0] & 0x0F) << 8 | p[1];
+        int y = (p[2] & 0x0F) << 8 | p[3];
+        data->point.x = x < LCD_RES ? x : LCD_RES - 1;
+        data->point.y = y < LCD_RES ? y : LCD_RES - 1;
+        data->state = LV_INDEV_STATE_PRESSED;
+        return;
+    }
+    data->state = LV_INDEV_STATE_RELEASED;
 }
 
 /* As on the Waveshare 1.75C, the bands go out through fixed internal buffers. */
@@ -625,6 +662,9 @@ static lv_display_t *display_start(lv_indev_t **touch)
     esp_lv_adapter_config_t adapter_cfg = ESP_LV_ADAPTER_DEFAULT_CONFIG();
     adapter_cfg.task_core_id = MUSE_UI_CORE;
     adapter_cfg.task_priority = MUSE_UI_PRIORITY;
+#if CONFIG_SPIRAM_FETCH_INSTRUCTIONS && CONFIG_SPIRAM_RODATA
+    adapter_cfg.stack_in_psram = true;   /* museStopWatch: internal RAM for the TTS (msw_stack.h) */
+#endif
     if (esp_lv_adapter_init(&adapter_cfg) != ESP_OK) {
         return NULL;
     }
@@ -1136,4 +1176,124 @@ static const muse_board_t s_board = {
 const muse_board_t *muse_board_get(void)
 {
     return &s_board;
+}
+
+/* ---- museStopWatch: IMU and vibration for mini apps (components/miniapp) ----
+ * The BMI270 rests after boot (imu_rest). msw_board_imu_start loads its
+ * configuration file, which its own microcontroller needs before the
+ * accelerometer and gyroscope run (Bosch's datasheet, "initialization"), then
+ * starts both: accelerometer +-4 g at 100 Hz, gyroscope +-2000 deg/s at 200 Hz.
+ * msw_board_imu_stop puts it back to rest. The motor is on the expander's
+ * PWM1, as M5's demo drives it (hal_ioe.cpp: 5 kHz, 12-bit duty, bit 15 on). */
+#define IMU_REG_DATA 0x0C           /* acc x, y, z then gyr x, y, z, little endian */
+#define IMU_REG_STATUS 0x21         /* INTERNAL_STATUS, 1 = initialized */
+#define IMU_REG_ACC_CONF 0x40
+#define IMU_REG_INIT_CTRL 0x59
+#define IMU_REG_INIT_ADDR 0x5B
+#define IMU_REG_INIT_DATA 0x5E
+#define IMU_REG_PWR_CONF 0x7C
+#define IMU_REG_PWR_CTRL 0x7D
+#define IMU_INIT_CHUNK 256
+#define IOE_PWM_FREQ 0x25
+
+extern const uint8_t msw_bmi270_config[];
+extern const size_t msw_bmi270_config_size;
+static i2c_master_dev_handle_t s_imu;
+
+esp_err_t msw_board_imu_start(void)
+{
+    if (s_imu) {
+        return ESP_OK;
+    }
+    ESP_RETURN_ON_ERROR(add_device(IMU_ADDR, 400000, &s_imu), TAG, "imu");
+    esp_err_t err = ESP_FAIL;
+    uint8_t *buf = heap_caps_malloc(1 + IMU_INIT_CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    uint8_t v = 0;
+    if (!buf || reg_read(s_imu, IMU_REG_CHIP_ID, &v, 1) != ESP_OK || v != IMU_CHIP_ID) {
+        goto fail;
+    }
+    reg_write(s_imu, IMU_REG_CMD, (uint8_t[]){ IMU_SOFT_RESET }, 1);
+    vTaskDelay(pdMS_TO_TICKS(5));
+    if (reg_write(s_imu, IMU_REG_PWR_CONF, (uint8_t[]){ 0x00 }, 1) != ESP_OK) {   /* advanced power save off */
+        goto fail;
+    }
+    vTaskDelay(pdMS_TO_TICKS(2));
+    reg_write(s_imu, IMU_REG_INIT_CTRL, (uint8_t[]){ 0x00 }, 1);
+    for (size_t off = 0; off < msw_bmi270_config_size; off += IMU_INIT_CHUNK) {
+        size_t n = msw_bmi270_config_size - off < IMU_INIT_CHUNK ? msw_bmi270_config_size - off : IMU_INIT_CHUNK;
+        uint8_t addr[2] = { (uint8_t)((off / 2) & 0x0F), (uint8_t)((off / 2) >> 4) };   /* in words */
+        if (reg_write(s_imu, IMU_REG_INIT_ADDR, addr, 2) != ESP_OK) {
+            goto fail;
+        }
+        buf[0] = IMU_REG_INIT_DATA;
+        memcpy(buf + 1, msw_bmi270_config + off, n);
+        if (i2c_master_transmit(s_imu, buf, n + 1, 100) != ESP_OK) {
+            goto fail;
+        }
+    }
+    reg_write(s_imu, IMU_REG_INIT_CTRL, (uint8_t[]){ 0x01 }, 1);
+    vTaskDelay(pdMS_TO_TICKS(25));
+    if (reg_read(s_imu, IMU_REG_STATUS, &v, 1) != ESP_OK || (v & 0x0F) != 1) {
+        ESP_LOGW(TAG, "BMI270: config not taken (status %02x)", v);
+        goto fail;
+    }
+    /* acc: performance filter, normal bandwidth, 100 Hz, +-4 g; gyr: 200 Hz, +-2000 deg/s */
+    uint8_t conf[2] = { 0xA8, 0x01 };
+    reg_write(s_imu, IMU_REG_ACC_CONF, conf, 2);
+    conf[0] = 0xA9;
+    conf[1] = 0x00;
+    reg_write(s_imu, IMU_REG_ACC_CONF + 2, conf, 2);
+    reg_write(s_imu, IMU_REG_PWR_CTRL, (uint8_t[]){ 0x0E }, 1);   /* acc, gyr, temperature on */
+    reg_write(s_imu, IMU_REG_PWR_CONF, (uint8_t[]){ 0x02 }, 1);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    free(buf);
+    ESP_LOGI(TAG, "BMI270: started");
+    return ESP_OK;
+fail:
+    free(buf);
+    i2c_master_bus_rm_device(s_imu);
+    s_imu = NULL;
+    ESP_LOGW(TAG, "BMI270: start failed");
+    return err;
+}
+
+/* Raw counts in the chip's axes: acc 8192 per g, gyr 16.4 per deg/s. */
+bool msw_board_imu_read(int16_t out[6])
+{
+    uint8_t d[12];
+    if (!s_imu || reg_read(s_imu, IMU_REG_DATA, d, sizeof(d)) != ESP_OK) {
+        return false;
+    }
+    for (int i = 0; i < 6; i++) {
+        out[i] = (int16_t)(d[2 * i] | d[2 * i + 1] << 8);
+    }
+    return true;
+}
+
+void msw_board_imu_stop(void)
+{
+    if (!s_imu) {
+        return;
+    }
+    reg_write(s_imu, IMU_REG_CMD, (uint8_t[]){ IMU_SOFT_RESET }, 1);   /* sensors suspended */
+    i2c_master_bus_rm_device(s_imu);
+    s_imu = NULL;
+}
+
+/* 0 stops; 1..100 is the duty in percent. */
+void msw_board_vibrate(int pct)
+{
+    static bool freq_set;
+    if (!s_ioe || !s_ioe_lock) {
+        return;
+    }
+    xSemaphoreTake(s_ioe_lock, portMAX_DELAY);
+    if (!freq_set) {
+        freq_set = reg_write(s_ioe, IOE_PWM_FREQ, (uint8_t[]){ 5000 & 0xFF, 5000 >> 8 }, 2) == ESP_OK;
+    }
+    pct = pct < 0 ? 0 : pct > 100 ? 100 : pct;
+    uint16_t duty = (uint16_t)(pct * 0x0FFF / 100);
+    uint8_t d[2] = { (uint8_t)(duty & 0xFF), (uint8_t)((duty >> 8) & 0x0F) | (pct ? 0x80 : 0) };
+    reg_write(s_ioe, IOE_PWM1_DUTY, d, 2);
+    xSemaphoreGive(s_ioe_lock);
 }

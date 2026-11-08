@@ -80,6 +80,7 @@ static volatile float s_monitor_db = -100.0f;
 static volatile bool s_chirp;
 static volatile bool s_loopback;
 static volatile bool s_mp3test;
+static const muse_voice_player_t *volatile s_player;
 static atomic_int s_call_view;
 static atomic_bool s_ptt_call;
 static atomic_bool s_shutdown;
@@ -1160,6 +1161,69 @@ static void run_call(bool ptt, size_t waking_chunks)
 }
 #endif
 
+static bool player_ready(void)
+{
+    const muse_voice_player_t *p = s_player;
+    return p && p->ready();
+}
+
+/* museStopWatch: plays the other source until it is done or a press comes
+ * (the press stays queued and starts the turn as usual). */
+static void play_player(void)
+{
+    const muse_voice_player_t *p = s_player;
+    static int16_t buf[MUSE_AUDIO_CHUNK];
+    static const int16_t silence[MUSE_AUDIO_CHUNK];
+    muse_state_set_mode(MUSE_MODE_SPEAKING);
+    for (;;) {
+        if (press_waiting() || atomic_load(&s_shutdown)) {
+            p->stop();
+            break;
+        }
+        size_t n = p->read(buf, MUSE_AUDIO_CHUNK);
+        if (n) {
+            muse_state_set_level(muse_audio_level(buf, n));
+            muse_audio_write(buf, n);
+        } else if (p->done()) {
+            break;
+        } else {   /* waiting for more: keep the speaker fed */
+            muse_state_set_level(0);
+            muse_audio_write(silence, MUSE_AUDIO_CHUNK);
+        }
+    }
+    muse_audio_write(silence, MUSE_AUDIO_CHUNK);
+    muse_state_set_level(0);
+    muse_state_poke();
+    muse_state_set_mode(MUSE_MODE_IDLE);
+}
+
+void muse_voice_set_player(const muse_voice_player_t *player)
+{
+    s_player = player;
+}
+
+const muse_voice_player_t *muse_voice_get_player(void)
+{
+    return s_player;
+}
+
+void muse_voice_player_kick(void)
+{
+    muse_state_nudge();
+}
+
+static const muse_reply_voice_t *volatile s_reply_voice;
+
+void muse_reply_voice_set(const muse_reply_voice_t *voice)
+{
+    s_reply_voice = voice;
+}
+
+const muse_reply_voice_t *muse_reply_voice(void)
+{
+    return s_reply_voice;
+}
+
 static void voice_task(void *arg)
 {
     bool pending_down = false;
@@ -1170,7 +1234,7 @@ static void voice_task(void *arg)
             muse_input_event_t ev;
             bool asleep = muse_state_asleep();
             bool battery = muse_state_on_battery();
-            bool rest = asleep && battery && !s_chirp && !s_mp3test && !s_loopback;
+            bool rest = asleep && battery && !s_chirp && !s_mp3test && !s_loopback && !player_ready();
 #if HOLD_NOTES
             /* A press goes first: send_held() leaves it queued and returns
              * without backing off, so retrying before it's read would spin. */
@@ -1215,6 +1279,10 @@ static void voice_task(void *arg)
             if (s_loopback) {
                 s_loopback = false;
                 muse_audio_loopback_test(muse_settings_volume());
+                pre_reset();
+            }
+            if (player_ready()) {
+                play_player();
                 pre_reset();
             }
             /* The 20 ms read paces this loop. */

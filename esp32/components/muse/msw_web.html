@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>museStopWatch 設定</title>
+<style>
+:root{--bg:#0f0c1d;--card:#1a1530;--text:#f2efff;--dim:#8b84a8;--accent:#a77dff;--ok:#6ff0bf;--warn:#ffb45c;--bad:#ff5c5c}
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;background:var(--bg);color:var(--text);margin:0;padding:16px;line-height:1.5}
+main{max-width:560px;margin:0 auto}
+h1{font-size:1.3rem;color:var(--accent);margin:4px 0 8px}
+h2{font-size:1.05rem;margin:0 0 8px}
+section{background:var(--card);border-radius:14px;padding:14px 16px;margin:14px 0}
+.dim{color:var(--dim);font-size:.85rem}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+label{display:block;margin:10px 0 4px;font-size:.9rem}
+input{width:100%;padding:10px;border-radius:10px;border:1px solid #3a3358;background:#0f0c1d;color:var(--text);font-size:1rem}
+button{margin:10px 8px 0 0;padding:10px 16px;border:0;border-radius:10px;background:var(--accent);color:#120d22;font-size:.95rem;font-weight:600}
+button.sub{background:#2c2548;color:var(--text)}
+button.danger{background:transparent;color:var(--bad);border:1px solid var(--bad);padding:4px 10px;margin:0;font-size:.8rem}
+button:disabled{opacity:.5}
+ul{list-style:none;padding:0;margin:6px 0 0}
+li{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid #2c2548;gap:8px}
+li:first-child{border-top:0}
+li.tap{cursor:pointer}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-size:.9rem}
+li small{display:block;color:var(--dim);font-size:.75rem;word-break:break-all}
+.kv dt{color:var(--dim)}.kv dd{margin:0;word-break:break-all}
+#last{min-height:1.2em}
+</style>
+</head>
+<body>
+<main>
+<h1>museStopWatch 設定</h1>
+<div id="last" class="dim"></div>
+
+<section>
+  <h2>状態</h2>
+  <dl class="kv">
+    <dt>Wi-Fi</dt><dd id="s-wifi">…</dd>
+    <dt>Muse</dt><dd id="s-muse">…</dd>
+    <dt>AP モード</dt><dd id="s-ap">…</dd>
+    <dt>電池</dt><dd id="s-batt">…</dd>
+    <dt>ファーム</dt><dd id="s-fw">…</dd>
+  </dl>
+</section>
+
+<section>
+  <h2>Wi-Fi</h2>
+  <div class="dim">保存は 8 件まで。前回つないだネットワークを優先し、見つからなければ電波の強い順につなぎます。
+    保存済みをタップするとつなぎ替えます。</div>
+  <label>保存済み</label>
+  <ul id="saved"><li class="dim">…</li></ul>
+
+  <label>新しく追加する</label>
+  <button id="scan" class="sub">周りのネットワークを探す</button>
+  <ul id="scan-list"></ul>
+  <label for="ssid">ネットワーク名（SSID）</label>
+  <input id="ssid" type="text" autocomplete="off" maxlength="32">
+  <label for="pass">パスワード</label>
+  <input id="pass" type="password" autocomplete="new-password" maxlength="64">
+  <button id="join">保存して接続</button>
+  <div class="dim">家の Wi-Fi 経由でこのページを開いている場合、つなぎ先が変わるとページとの接続が切れます。
+    確実に操作したいときは本体の AP モードから開いてください。</div>
+</section>
+
+<section>
+  <h2>Muse</h2>
+  <label for="host">サーバー <span class="dim">（空欄なら標準）</span></label>
+  <input id="host" type="text" autocomplete="off" maxlength="63">
+  <label for="vm">VM ID <span class="dim">（空欄なら既定の VM）</span></label>
+  <input id="vm" type="text" autocomplete="off" maxlength="63">
+  <label for="token">デバイストークン <span id="token-state" class="dim"></span></label>
+  <input id="token" type="password" autocomplete="new-password" maxlength="1023" placeholder="変えるときだけ入力">
+  <button id="muse-save">保存</button>
+  <button id="muse-test" class="sub">接続テスト</button>
+
+  <label for="sdk">SDK トークン <span id="sdk-state" class="dim"></span></label>
+  <input id="sdk" type="password" autocomplete="new-password" maxlength="1023" placeholder="mgst_…">
+  <button id="sdk-save">保存して再起動</button>
+  <div class="dim">保存すると本体が再起動します。トークンはこのページには表示されません。</div>
+</section>
+
+<section>
+  <h2>サイドチャット</h2>
+  <div class="dim">メインとは別の会話です。選んだ会話に本体から話しかけ、返事もその会話から来ます。
+    新しく作った会話は、最初に話しかけたときに Muse 側で始まります。
+    一覧は本体だけが覚えています（<span id="side-max">8</span> 件まで）。削除しても Muse 側の会話は消えません。</div>
+  <ul id="side"><li class="dim">…</li></ul>
+  <label for="side-id">セッション ID <span class="dim">（空欄なら新しく作る）</span></label>
+  <input id="side-id" type="text" autocomplete="off" maxlength="40" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+  <button id="side-new">追加して切り替え</button>
+  <div class="dim">今あるサイドチャットに参加するには、そのサイドチャットで Muse に「このチャットの ID を教えて」と聞くと教えてくれます。
+    その ID をここに入れてください。エージェント実行の ID ではなく、チャットの ID です。</div>
+</section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const WIFI = {off: 'オフ', not_set: '未設定', joining: '接続中…', connected: '接続済み', failed: '失敗', not_nearby: '圏外'};
+let filled = false;
+let savedNames = [], scanned = [];
+
+function say(text, cls = '') { $('last').className = cls || 'dim'; $('last').textContent = text; }
+
+async function cmd(lines) {
+  try {
+    const r = await fetch('/api/cmd', {method: 'POST', headers: {'X-MSW': '1', 'Content-Type': 'text/plain;charset=utf-8'},
+                                       body: lines.join('\n')});
+    if (r.status === 403) { say('鍵が無効です。本体の QR > Web QR から開き直してください。', 'bad'); return false; }
+    if (!r.ok) { say('送信に失敗しました（' + r.status + '）', 'bad'); return false; }
+    setTimeout(refresh, 400);
+    return true;
+  } catch (e) { say('本体に届きませんでした: ' + e.message, 'bad'); return false; }
+}
+
+function li(text, extra) {
+  const e = document.createElement('li');
+  const s = document.createElement('span'); s.textContent = text; e.appendChild(s);
+  if (extra) e.appendChild(extra);
+  return e;
+}
+
+function render(s) {
+  const d = s.device, w = d.wifi;
+  $('s-wifi').textContent = (WIFI[w.state] || w.state) + (w.ssid ? '：' + w.ssid : '') + (w.ip && w.ip !== '0.0.0.0' ? '（' + w.ip + '）' : '');
+  $('s-muse').textContent = d.hatch.state + (d.link.paired ? '・ペアリング済み' : '');
+  $('s-ap').textContent = s.ap.on ? '動作中（' + s.ap.clients + ' 台接続）' : '停止中';
+  $('s-batt').textContent = d.battery < 0 ? 'USB' : d.battery + '%';
+  $('s-fw').textContent = d.name + ' / ' + d.fw;
+  $('token-state').textContent = d.hatch.token ? '（設定済み）' : '（未設定）';
+  $('sdk-state').textContent = s.sdk_token_bad ? '（前回の値は無効でした）' : (s.sdk_token ? '（設定済み）' : '（未設定）');
+  if (d.last) say('本体: ' + d.last);
+
+  const saved = $('saved'); saved.textContent = '';
+  if (!s.saved.length) saved.appendChild(li('（なし）'));
+  savedNames = s.saved.map(n => n.ssid);
+  for (const n of s.saved) {
+    const on = n.ssid === w.ssid && w.state === 'connected';
+    const b = document.createElement('button'); b.className = 'danger'; b.textContent = '削除';
+    b.onclick = ev => { ev.stopPropagation(); if (confirm('「' + n.ssid + '」を削除しますか？\n保存したパスワードも消えます。')) cmd(['wifi.forget=' + n.ssid]); };
+    const e = li(n.ssid + (n.hidden ? '（非公開）' : '') + (on ? ' ✓ 接続中' : ''), b);
+    if (!on) {
+      e.className = 'tap';
+      e.onclick = async () => { if (await cmd(['wifi.choose=' + n.ssid])) say('「' + n.ssid + '」につなぎ替えます。', 'ok'); };
+    }
+    saved.appendChild(e);
+  }
+
+  $('scan').disabled = s.scanning;
+  $('scan').textContent = s.scanning ? '探しています…' : '周りのネットワークを探す';
+  scanned = s.scan;
+  const list = $('scan-list'); list.textContent = '';
+  for (const a of s.scan) {
+    const sig = document.createElement('span'); sig.className = 'dim';
+    sig.textContent = (a.secure ? '🔒 ' : '') + a.rssi + ' dBm';
+    const e = li(a.ssid, sig); e.className = 'tap';
+    e.onclick = () => { $('ssid').value = a.ssid; $('pass').value = ''; $('pass').focus(); };
+    list.appendChild(e);
+  }
+
+  renderSide(s.side);
+
+  if (!filled) { $('host').value = d.hatch.host; $('vm').value = d.hatch.vm; filled = true; }
+}
+
+function renderSide(side) {
+  if (!side) return;
+  const ul = $('side'); ul.textContent = '';
+  $('side-max').textContent = side.max;
+  const add = (title, sub, on, select, del) => {
+    const e = document.createElement('li');
+    const s = document.createElement('span'); s.textContent = title + (on ? ' ✓ 使用中' : '');
+    if (sub) { const m = document.createElement('small'); m.textContent = sub; s.appendChild(m); }
+    e.appendChild(s);
+    if (del) {
+      const b = document.createElement('button'); b.className = 'danger'; b.textContent = '削除';
+      b.onclick = ev => { ev.stopPropagation(); del(); };
+      e.appendChild(b);
+    }
+    if (!on) { e.className = 'tap'; e.onclick = select; }
+    ul.appendChild(e);
+  };
+  add('メイン', '', side.cur < 0, async () => { if (await cmd(['side.main'])) say('メインの会話に切り替えました。', 'ok'); });
+  side.list.forEach((c, i) => add(c.name, c.id, side.cur === i,
+    async () => { if (await cmd(['side.select=' + c.id])) say('「' + c.name + '」に切り替えました。', 'ok'); },
+    () => { if (confirm('「' + c.name + '」を一覧から削除しますか？\nMuse 側の会話は残ります。')) cmd(['side.delete=' + c.id]); }));
+  $('side-new').disabled = side.list.length >= side.max;
+  $('side-new').textContent = side.list.length >= side.max ? side.max + ' 件までです' : '追加して切り替え';
+  if (side.bad && sideAsked) { sideAsked = false; say('セッション ID の形式が違います（8-4-4-4-12 の 36 文字）', 'bad'); }
+}
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/status', {cache: 'no-store'});
+    if (r.status === 403) { say('鍵が無効です。本体の QR > Web QR から開き直してください。', 'bad'); return; }
+    render(await r.json());
+  } catch (e) { say('本体と通信できません', 'warn'); }
+}
+
+$('scan').onclick = () => cmd(['wifi.scan']);
+$('join').onclick = async () => {
+  const ssid = $('ssid').value.trim();
+  if (!ssid) { say('ネットワーク名を入れてください', 'warn'); return; }
+  let lines;
+  if (!$('pass').value && savedNames.includes(ssid)) {
+    lines = ['wifi.choose=' + ssid];   // keep its saved password
+  } else {
+    const seen = scanned.find(a => a.ssid === ssid);
+    if (!$('pass').value && seen && seen.secure) { say('このネットワークにはパスワードが必要です', 'warn'); return; }
+    lines = ['wifi.ssid=' + ssid];
+    if ($('pass').value) lines.push('wifi.pass=' + $('pass').value);
+    lines.push('wifi.connect');
+  }
+  if (await cmd(lines)) { $('pass').value = ''; say('保存しました。接続を始めます。', 'ok'); }
+};
+$('muse-save').onclick = async () => {
+  const lines = ['hatch.host=' + $('host').value.trim(), 'hatch.vm=' + $('vm').value.trim()];
+  if ($('token').value.trim()) lines.push('hatch.token=' + $('token').value.trim());
+  if (await cmd(lines)) { $('token').value = ''; say('保存しました。', 'ok'); }
+};
+$('muse-test').onclick = () => cmd(['hatch.test']);
+let sideAsked = false;
+$('side-new').onclick = async () => {
+  const id = $('side-id').value.trim();
+  if (id && !/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(id)) {
+    say('セッション ID の形式が違います（8-4-4-4-12 の 36 文字）', 'warn'); return;
+  }
+  sideAsked = true;
+  if (await cmd(['side.add=' + id])) {
+    $('side-id').value = '';
+    say(id ? 'その ID のサイドチャットに切り替えました。' : '新しいサイドチャットを作り、切り替えました。', 'ok');
+  }
+};
+$('sdk-save').onclick = async () => {
+  const t = $('sdk').value.trim();
+  if (!t) { say('SDK トークンを入れてください', 'warn'); return; }
+  if (!confirm('保存すると本体が再起動します。よろしいですか？')) return;
+  if (await cmd(['sdk_token=' + t])) { $('sdk').value = ''; say('送信しました。正しいトークンなら本体が再起動します。', 'ok'); }
+};
+
+// While the page is open and used, its polling keeps the device from auto-sleeping.
+// It stops when hidden or after 5 minutes without a touch, so a forgotten tab
+// doesn't keep the screen on.
+const IDLE_MS = 5 * 60 * 1000;
+let lastUse = Date.now(), paused = false;
+function poll() {
+  if (document.hidden) return;
+  if (Date.now() - lastUse > IDLE_MS) {
+    if (!paused) { paused = true; say('しばらく操作がないので更新を止めました。画面をタップすると再開します。', 'warn'); }
+    return;
+  }
+  refresh();
+}
+for (const ev of ['pointerdown', 'keydown']) {
+  document.addEventListener(ev, () => { lastUse = Date.now(); if (paused) { paused = false; say(''); refresh(); } });
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { lastUse = Date.now(); paused = false; refresh(); } });
+refresh();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>

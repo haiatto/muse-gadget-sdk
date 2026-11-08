@@ -317,6 +317,16 @@ menu "Muse"
             rarer characters and Korean show as boxes. Takes about 910 KB of
             flash, against about 1.2 MB.
 
+    config MUSE_CJK_FONT_NOTO_JP
+        bool "Draw CJK with Noto Sans JP instead of Unifont (museStopWatch)"
+        depends on MUSE_CJK_FONT && !MUSE_CJK_FONT_NOTO
+        default n
+        help
+            Anti-aliased Noto Sans JP Medium at 16 px, 4 bpp, with Japanese
+            glyph shapes: kana, CJK punctuation, fullwidth forms and all of
+            JIS X 0208 (6355 kanji). Rarer kanji and Korean show as boxes.
+            tools/muse/gen_cjk_noto_jp_font.sh makes it.
+
     config MUSE_LATIN_FONT
         bool "Show Vietnamese and other accented letters in captions"
         depends on MUSE_ENABLED && !MUSE_UI_FREEINK

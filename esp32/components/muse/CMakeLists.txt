@@ -45,6 +45,8 @@ if(CONFIG_MUSE_ENABLED)
         list(APPEND embed "eink/fonts/montserrat.ttf" "eink/fonts/symbols.ttf" "eink/fonts/unscii.ttf")
     else()
         list(APPEND srcs "muse_ui.c" "muse_menu.c" "muse_settings_ui.c" "muse_keypad.c" "muse_lv_mem.c")
+        list(APPEND srcs "msw_net.c" "msw_text.c" "msw_side.c" "msw_mem.c")   # museStopWatch: AP mode and Web page, Japanese labels
+        list(APPEND embed "msw_web.html")
     endif()
     if(CONFIG_MUSE_HATCH)
         list(APPEND srcs "muse_chat.c" "muse_account_api.c" "muse_chat_session.cpp")
@@ -56,7 +58,9 @@ if(CONFIG_MUSE_ENABLED)
         list(APPEND srcs "muse_chat_link.c")   # text replies over Link's session
     endif()
     list(APPEND srcs "muse_chat_text.c")
-    if(CONFIG_MUSE_CJK_FONT_NOTO)
+    if(CONFIG_MUSE_CJK_FONT_NOTO_JP)
+        list(APPEND srcs "fonts/muse_font_cjk_noto_jp_16.c")   # museStopWatch
+    elseif(CONFIG_MUSE_CJK_FONT_NOTO)
         list(APPEND srcs "fonts/muse_font_cjk_noto_16.c")   # captions' CJK fallback
     elseif(CONFIG_MUSE_CJK_FONT)
         list(APPEND srcs "fonts/muse_font_cjk_16.c")
@@ -126,7 +130,7 @@ if(CONFIG_MUSE_ENABLED)
     elseif(CONFIG_MUSE_BOARD_M5STACK_STICKC_PLUS2)
         list(APPEND srcs "boards/board_m5stack_stickc_plus2.c")
     elseif(CONFIG_MUSE_BOARD_M5STACK_STOPWATCH)
-        list(APPEND srcs "boards/board_m5stack_stopwatch.c" "boards/muse_lcd_bands.c")
+        list(APPEND srcs "boards/board_m5stack_stopwatch.c" "boards/muse_lcd_bands.c" "boards/msw_bmi270_config.c")   # museStopWatch: IMU for mini apps
     elseif(CONFIG_MUSE_BOARD_SEEED_XIAO_S3_147)
         list(APPEND srcs "boards/board_seeed_xiao_s3_147.c")
     elseif(CONFIG_MUSE_BOARD_M5STACK_CORES3)
@@ -201,6 +205,7 @@ set(muse_priv_requires
     # before Kconfig values exist, so these can't depend on it; only the code does.
     fatfs esp_driver_sdspi sdmmc)
 list(APPEND muse_priv_requires camera)
+list(APPEND muse_priv_requires esp_http_server)   # museStopWatch: msw_net.c
 # The P4 camera's JPEG encoder; Kconfig is not loaded yet when requirements expand.
 if(IDF_TARGET STREQUAL "esp32p4")
     list(APPEND muse_priv_requires esp_driver_jpeg)

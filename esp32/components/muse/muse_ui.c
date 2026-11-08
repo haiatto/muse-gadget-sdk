@@ -133,7 +133,24 @@ bool muse_ui_face_active(void)
     return s_face_active;
 }
 static lv_obj_t *s_settings;
-static lv_obj_t *s_dots[2];
+/* museStopWatch: the mini-app launcher, left of the face (components/miniapp). */
+static lv_obj_t *s_launcher;
+void msw_launcher_build(lv_obj_t *tile) __attribute__((weak));
+#define TILES 3
+static lv_obj_t *s_dots[TILES];
+
+/* The tileview's scroll position with the face showing: past the launcher. */
+static int face_scroll_x(void)
+{
+    return s_face ? lv_obj_get_x(s_face) : 0;
+}
+
+/* 0 launcher, 1 face, 2 settings (dots left to right). */
+static int tile_page(void)
+{
+    lv_obj_t *t = lv_tileview_get_tile_active(s_tv);
+    return t == s_settings ? 2 : t == s_launcher ? 0 : 1;
+}
 static lv_obj_t *s_wifi_icon;
 static lv_obj_t *s_ble_icon;
 static lv_obj_t *s_cover;
@@ -548,7 +565,10 @@ static const lv_font_t *font_pick(const lv_font_t *full, const lv_font_t *compac
     return s_small ? compact : full;
 }
 
-#if CONFIG_MUSE_CJK_FONT_NOTO
+#if CONFIG_MUSE_CJK_FONT_NOTO_JP   /* museStopWatch */
+LV_FONT_DECLARE(muse_font_cjk_noto_jp_16)
+#define CJK_FONT muse_font_cjk_noto_jp_16
+#elif CONFIG_MUSE_CJK_FONT_NOTO
 LV_FONT_DECLARE(muse_font_cjk_noto_16)
 #define CJK_FONT muse_font_cjk_noto_16
 #elif CONFIG_MUSE_CJK_FONT
@@ -1138,7 +1158,13 @@ static void build_screen(void)
         lv_obj_set_style_bg_color(s_tv, lv_color_black(), 0);
         lv_obj_set_style_bg_opa(s_tv, LV_OPA_COVER, 0);
         lv_obj_set_scrollbar_mode(s_tv, LV_SCROLLBAR_MODE_OFF);
-        s_face = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT);
+        int col = 0;
+        if (msw_launcher_build) {   /* museStopWatch: swipe right from Muse for the launcher */
+            s_launcher = lv_tileview_add_tile(s_tv, col++, 0, LV_DIR_RIGHT);
+            lv_obj_set_scrollbar_mode(s_launcher, LV_SCROLLBAR_MODE_OFF);
+            msw_launcher_build(s_launcher);
+        }
+        s_face = lv_tileview_add_tile(s_tv, col++, 0, s_launcher ? LV_DIR_LEFT | LV_DIR_RIGHT : LV_DIR_RIGHT);
         /* It never scrolls, but LVGL would size its scrollbars from all its
          * children every time it draws any part of it. */
         lv_obj_set_scrollbar_mode(s_face, LV_SCROLLBAR_MODE_OFF);
@@ -1146,7 +1172,8 @@ static void build_screen(void)
          * shows as a different-coloured square around the character. */
         lv_obj_set_style_bg_color(s_face, lv_color_black(), 0);
         lv_obj_set_style_bg_opa(s_face, LV_OPA_COVER, 0);
-        s_settings = lv_tileview_add_tile(s_tv, 1, 0, LV_DIR_LEFT);
+        s_settings = lv_tileview_add_tile(s_tv, col, 0, LV_DIR_LEFT);
+        lv_tileview_set_tile(s_tv, s_face, LV_ANIM_OFF);   /* start on Muse */
         lv_obj_add_event_cb(s_tv, tile_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
         face = s_face;
     }
@@ -1459,8 +1486,10 @@ static lv_obj_t *make_control_icon(lv_obj_t *scr, const muse_button_hint_t *pos,
 static void update_control_hints(muse_mode_t mode)
 {
     if (!s_ptt_hint) return;
-    /* Don't obscure settings rows/keyboards with floating physical icons. */
-    bool settings = s_tv && lv_tileview_get_tile_active(s_tv) == s_settings;
+    /* Don't obscure settings rows/keyboards with floating physical icons.
+     * museStopWatch: nor the app launcher (msw_launcher_build). */
+    lv_obj_t *tile = s_tv ? lv_tileview_get_tile_active(s_tv) : NULL;
+    bool settings = tile && (tile == s_settings || tile == s_launcher);
     lv_obj_set_flag(s_ptt_hint, LV_OBJ_FLAG_HIDDEN, settings);
     lv_obj_set_flag(s_spk_hint, LV_OBJ_FLAG_HIDDEN, settings);
     lv_obj_set_flag(s_pwr_hint, LV_OBJ_FLAG_HIDDEN, settings);
@@ -1482,7 +1511,8 @@ static void build_overlays(void)
     lv_obj_t *scr = lv_screen_active();
 
     /* Page dots. */
-    for (int i = 0; i < 2 && s_tv; i++) {
+    int dots = s_launcher ? TILES : 2;
+    for (int i = 0; i < dots && s_tv; i++) {
         lv_obj_t *d = lv_obj_create(scr);
         lv_obj_remove_style_all(d);
         lv_obj_set_size(d, 8, 8);
@@ -1490,7 +1520,7 @@ static void build_overlays(void)
         lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(d, lv_color_hex(COLOR_DOT_OFF), 0);
         lv_obj_remove_flag(d, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_align(d, LV_ALIGN_BOTTOM_MID, i ? 8 : -8, -14);
+        lv_obj_align(d, LV_ALIGN_BOTTOM_MID, 16 * i - 8 * (dots - 1), -14);
         s_dots[i] = d;
     }
 
@@ -1661,19 +1691,21 @@ static void update_chrome(float now)
     s_next_settings_tick = now + SETTINGS_TICK_S;
 
     if (s_tv) {
-        int page = lv_tileview_get_tile_active(s_tv) == s_settings;
+        int tile = tile_page();
+        bool settings = tile == 2;
+        int page = s_launcher ? tile : settings;   /* the lit dot */
         bool subpage = muse_settings_ui_in_subpage();
-        s_swipe_enabled = !page || !subpage;
+        s_swipe_enabled = !settings || !subpage;
         update_tileview_swipe();
-        int shown = page * 2 + subpage;
+        int shown = tile * 2 + subpage;
         if (shown != s_shown_page) {
-            for (int i = 0; i < 2; i++) {
+            for (int i = 0; i < TILES && s_dots[i]; i++) {
                 lv_obj_set_style_bg_color(s_dots[i], lv_color_hex(i == page ? COLOR_ACCENT : COLOR_DOT_OFF), 0);
-                lv_obj_set_flag(s_dots[i], LV_OBJ_FLAG_HIDDEN, page && subpage);
+                lv_obj_set_flag(s_dots[i], LV_OBJ_FLAG_HIDDEN, settings && subpage);
             }
             s_shown_page = shown;
         }
-        muse_settings_ui_tick(lv_obj_get_scroll_x(s_tv) > 0);
+        muse_settings_ui_tick(lv_obj_get_scroll_x(s_tv) > face_scroll_x());
     }
 
     /* Joining, the icon blinks: the compact layout has no state label. */
@@ -2133,7 +2165,7 @@ static void frame_tick(lv_timer_t *timer)
     if (s_image_dsc.data) {
         return;   /* the image covers the face */
     }
-    if (s_tv && lv_obj_get_scroll_x(s_tv) != 0) {
+    if (s_tv && lv_obj_get_scroll_x(s_tv) != face_scroll_x()) {
         /* Off screen, or sliding to or from settings: hold still so the
          * slide gets the whole frame time. */
         return;
