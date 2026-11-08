@@ -6,6 +6,8 @@
  * Tap an icon to start the app. Hold one for its details and a red x that
  * removes it. The grid is rebuilt by an lvgl timer whenever the store
  * changes (msw_app_changes), so other tasks never touch lvgl here.
+ * Right of the title, the speaker's state: here (no app running) the yellow
+ * button turns it on and off, and the face's own icon is not on screen.
  */
 #include <stdio.h>
 #include <string.h>
@@ -16,6 +18,7 @@
 
 #include "lvgl.h"
 #include "muse_board.h"
+#include "muse_settings.h"
 #include "msw_text.h"
 #include "esp_attr.h"
 #include "msw_app_priv.h"
@@ -27,7 +30,8 @@
 LV_FONT_DECLARE(lv_font_montserrat_14)
 LV_FONT_DECLARE(lv_font_montserrat_20)
 
-static lv_obj_t *s_tile, *s_grid, *s_title, *s_empty, *s_info;
+static lv_obj_t *s_tile, *s_grid, *s_title, *s_empty, *s_info, *s_spk;
+static int s_spk_on = -1;      /* shown state; -1 none yet */
 static uint32_t s_seen = UINT32_MAX;
 static bool s_ready;
 
@@ -238,9 +242,22 @@ static void rebuild(void)
     }
 }
 
+/* The speaker mark, kept beside the title (its text changes width). */
+static void speaker_sync(void)
+{
+    int on = muse_settings_speaker_on() ? 1 : 0;
+    if (on != s_spk_on) {
+        s_spk_on = on;
+        lv_label_set_text(s_spk, on ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE);
+        lv_obj_set_style_text_color(s_spk, on ? lv_color_hex(0xFFC107) : lv_color_hex(0x707880), 0);
+    }
+    lv_obj_align_to(s_spk, s_title, LV_ALIGN_OUT_RIGHT_MID, 12, 0);
+}
+
 static void poll(lv_timer_t *t)
 {
     (void)t;
+    speaker_sync();
     uint32_t now = msw_app_changes();
     if (now != s_seen && s_ready) {
         s_seen = now;
@@ -275,6 +292,10 @@ void msw_launcher_build(lv_obj_t *tile)
     lv_obj_set_style_text_color(s_title, lv_color_white(), 0);
     lv_label_set_text(s_title, "アプリ");
     lv_obj_align(s_title, LV_ALIGN_TOP_MID, 0, 36);
+
+    s_spk = lv_label_create(tile);
+    lv_obj_set_style_text_font(s_spk, &lv_font_montserrat_20, 0);
+    speaker_sync();
 
     s_grid = lv_obj_create(tile);
     lv_obj_remove_style_all(s_grid);

@@ -82,6 +82,18 @@ void msw_app_logf(const char *fmt, ...)
     portEXIT_CRITICAL(&s_log_mux);
 }
 
+/* The line back lines before the newest (0 = newest), for the crash report:
+ * no lock, as the panic handler calls it with everything stopped. */
+int msw_app_log_peek(int back, const char **line)
+{
+    *line = NULL;
+    if (!s_log || back < 0 || back >= s_log_count) {
+        return 0;
+    }
+    *line = s_log[(s_log_head + s_log_count - 1 - back) % LOG_LINES];
+    return 1;
+}
+
 size_t msw_app_log_text(char *buf, size_t cap)
 {
     size_t n = 0;
@@ -737,6 +749,38 @@ static void unload(void *arg)
     }
 }
 
+/* The app's code not returning: an esp_timer looks each second while the
+ * app runs and logs it once (the yellow button and app.stop can't end it). */
+#define STUCK_MS 3000
+#define SLOW_TICK_MS 300
+static atomic_uint s_busy_since;      /* ms + 1 when the app's code was entered; 0 outside */
+static const char *s_busy_in;
+static bool s_stuck_logged;
+static const char *s_watch_id;
+
+static void watch(void *arg)
+{
+    (void)arg;
+    uint32_t since = atomic_load(&s_busy_since);
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000) + 1;
+    if (since && !s_stuck_logged && now - since >= STUCK_MS) {
+        s_stuck_logged = true;
+        msw_app_logf("%s: %s has not returned for %u s (a loop that waits for something?). "
+                     "The yellow button and app.stop can't end it: restart the device",
+                     s_watch_id, s_busy_in, (unsigned)((now - since) / 1000));
+    }
+}
+
+static void busy(const char *in)
+{
+    if (in) {
+        s_busy_in = in;
+        atomic_store(&s_busy_since, (uint32_t)(esp_timer_get_time() / 1000) + 1);
+    } else {
+        atomic_store(&s_busy_since, 0);
+    }
+}
+
 static void app_task(void *arg)
 {
     run_t *r = arg;
@@ -745,9 +789,21 @@ static void app_task(void *arg)
     msw_sound_app(true);
     muse_board->display_lock(-1);
     uintptr_t lo = esp_elf_runtime_base(&r->elf);
-    msw_api_begin(r->id, lo, lo + r->elf.text_alloc_size);
+    msw_crash_app(r->id, lo, lo + r->elf.text_alloc_size, r->elf.sec[ELF_SEC_TEXT].v_addr);
+    msw_api_begin(r->id, lo, lo + r->elf.text_alloc_size, (uintptr_t)r->elf.ptext);
+    msw_api_set_rodata(r->elf.sec[ELF_SEC_TEXT].v_addr, r->elf.sec[ELF_SEC_RODATA].v_addr,
+                       r->elf.sec[ELF_SEC_RODATA].size, r->elf.sec[ELF_SEC_RODATA].addr);
+    s_watch_id = r->id;
+    s_stuck_logged = false;
+    esp_timer_handle_t watcher = NULL;
+    const esp_timer_create_args_t wa = { .callback = watch, .name = "msw_watch" };
+    if (esp_timer_create(&wa, &watcher) == ESP_OK) {
+        esp_timer_start_periodic(watcher, 1000 * 1000);
+    }
+    busy("app_main");
     run_init_arrays(&r->elf);
     int rc = r->elf.entry(1, argv);
+    busy(NULL);
     muse_board->display_unlock();
     if (rc != 0) {
         msw_app_logf("%s: app_main returned %d", r->id, rc);
@@ -756,6 +812,7 @@ static void app_task(void *arg)
     uint32_t last_ms = 0;
     uint32_t ticks = 0;
     int64_t busy_us = 0, worst_us = 0;
+    int slow_logged = 0;
     while (rc == 0 && !atomic_load(&s_stop) && !msw_api_exit_asked()) {
         int64_t now = esp_timer_get_time();
         if (msw_api_menu_owned() && atomic_load(&s_yellow) && now - s_yellow_at >= YELLOW_HOLD_MS * 1000LL) {
@@ -778,7 +835,10 @@ static void app_task(void *arg)
         }
         uint32_t ms = (uint32_t)((now - start) / 1000);
         muse_board->display_lock(-1);
-        if (!deliver_buttons(r)) {
+        busy("a button callback");
+        bool go_on = deliver_buttons(r);
+        busy(NULL);
+        if (!go_on) {
             muse_board->display_unlock();
             msw_app_logf("%s: quit from the app menu", r->id);
             break;
@@ -790,9 +850,16 @@ static void app_task(void *arg)
             continue;
         }
         int64_t t0 = esp_timer_get_time();
+        busy("a tick");
         msw_api_tick(ms - last_ms);
+        busy(NULL);
         int64_t took = esp_timer_get_time() - t0;
         muse_board->display_unlock();
+        if (took > SLOW_TICK_MS * 1000LL && slow_logged < 3) {
+            slow_logged++;
+            msw_app_logf("%s: a tick took %d ms; keep it to a few ms (the screen, sound and buttons wait)%s",
+                         r->id, (int)(took / 1000), slow_logged == 3 ? " (not logged again)" : "");
+        }
         busy_us += took;
         worst_us = took > worst_us ? took : worst_us;
         ticks++;
@@ -807,11 +874,18 @@ static void app_task(void *arg)
     }
     muse_board->display_lock(-1);
     msw_menu_close();
+    busy("the exit callback");
     msw_api_call_exit_cb();
+    busy(NULL);
+    if (watcher) {
+        esp_timer_stop(watcher);
+        esp_timer_delete(watcher);
+    }
     msw_api_end();
     muse_board->display_unlock();
     msw_sound_app(false);
     msw_imu_release();
+    msw_crash_app(NULL, 0, 0, 0);
     msw_app_service(unload, r);
     mark_running(NULL);
     msw_app_logf("%s: ended", r->id);
@@ -978,6 +1052,26 @@ static bool console(const char *line)
             free(buf);
         }
         printf("@msw.app.log done\n");
+    } else if (!strcmp(cmd, "shot")) {
+        /* app.screenshot's JPEG in base64 lines (tools: decode to see it) */
+        extern uint8_t *msw_app_screenshot(int quality, size_t *n, const char **source, const char **why, int *ms);
+        size_t n;
+        const char *source = "", *why = NULL;
+        int ms = 0;
+        uint8_t *jpg = msw_app_screenshot(70, &n, &source, &why, &ms);
+        if (!jpg) {
+            printf("@msw.app.shot error %s\n", why ? why : "failed");
+        } else {
+            printf("@msw.app.shot %u bytes, %d ms, %s\n", (unsigned)n, ms, source);
+            for (size_t i = 0; i < n; i += 57) {
+                unsigned char line[80];
+                size_t len = 0;
+                mbedtls_base64_encode(line, sizeof(line), &len, jpg + i, n - i < 57 ? n - i : 57);
+                printf("%.*s\n", (int)len, line);
+            }
+            free(jpg);
+            printf("@msw.app.shot done\n");
+        }
     } else if (!strncmp(cmd, "src ", 4)) {
         const char *why;
         char *text = msw_app_source(cmd + 4, &why);
@@ -1049,6 +1143,7 @@ void msw_app_core_init(void)
                      crash ? "it crashed the device" : "reset or power off");
     }
     s_mark.magic = 0;
+    msw_crash_boot_report();
 
     s_svc_q = xQueueCreate(4, sizeof(svc_req_t));
     if (!s_svc_q || xTaskCreatePinnedToCore(svc_task, "msw_apps", SVC_STACK, NULL, 3, &s_svc_task, 0) != pdPASS) {

@@ -5,6 +5,11 @@ dependencies:
     rules:
       - if: '$CONFIG{MUSE_BOARD_ID} == "m5stack_stopwatch"'
   espressif/cjson: "~1.7"
+  # app.screenshot (msw_app_shot.c); esp_lv_decoder already brings it in.
+  espressif/esp_new_jpeg:
+    version: "1.*"
+    rules:
+      - if: '$CONFIG{MUSE_BOARD_ID} == "m5stack_stopwatch"'
   lvgl/lvgl:
     version: "9.5.0"
     public: true

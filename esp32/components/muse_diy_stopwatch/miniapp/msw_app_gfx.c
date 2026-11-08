@@ -93,6 +93,27 @@ msw_gfx_t *msw_fb(void)
     return s_fb;
 }
 
+/* The frame as the panel shows it (with Muse's avatar and bubble), RGB565
+ * big endian, for app.screenshot. false: no frame (lvgl drawing). Display locked. */
+bool msw_gfx_copy_frame(uint16_t *out)
+{
+    if (!s_fb) {
+        return false;
+    }
+    bool overlay = msw_overlay_active();
+    for (int y = 0; y < MSW_SCREEN_H; y++) {
+        uint16_t *o = out + (size_t)y * MSW_SCREEN_W;
+        memcpy(o, s_fb->px + (size_t)y * s_fb->stride, MSW_SCREEN_W * 2);
+        if (overlay) {
+            msw_overlay_draw(o, y, 0, MSW_SCREEN_W);
+        }
+        for (int x = 0; x < MSW_SCREEN_W; x++) {
+            o[x] = (uint16_t)((o[x] >> 8) | (o[x] << 8));
+        }
+    }
+    return true;
+}
+
 /* ---- present -------------------------------------------------------------- */
 
 typedef struct {
@@ -362,10 +383,26 @@ void msw_sprite_free(msw_sprite_t *s)
     msw_app_free(s);
 }
 
-msw_sprite_t *msw_sprite_from_art(const char *const *rows, int nrows, const msw_pal_t *pal)
+#define ART_ROWS_MAX 256
+
+msw_sprite_t *msw_sprite_from_art(const char *const *rows_in, int nrows, const msw_pal_t *pal)
 {
-    if (!rows || nrows <= 0 || !rows[0]) {
+    if (nrows <= 0 || nrows > ART_ROWS_MAX) {
+        msw_log("sprite art: %d rows (1..%d)", nrows, ART_ROWS_MAX);
         return NULL;
+    }
+    rows_in = msw_api_readable(rows_in, sizeof(*rows_in) * nrows, "msw_sprite_from_art");
+    pal = msw_api_readable(pal, sizeof(*pal), "msw_sprite_from_art");
+    if (!rows_in) {
+        return NULL;
+    }
+    const char *rows[ART_ROWS_MAX];
+    for (int y = 0; y < nrows; y++) {
+        rows[y] = msw_api_readable(rows_in[y], 1, "msw_sprite_from_art");
+        if (!rows[y]) {
+            msw_log("sprite art: row %d is not readable", y);
+            return NULL;
+        }
     }
     int w = (int)strlen(rows[0]);
     for (int y = 1; y < nrows; y++) {
@@ -513,6 +550,7 @@ static int glyph(msw_gfx_t *g, const lv_font_t *font, int x, int y, uint32_t c, 
 
 int msw_gfx_text(msw_gfx_t *g, int x, int y, const char *utf8, uint16_t color, int size)
 {
+    utf8 = msw_api_readable(utf8, 1, g ? "msw_gfx_text" : "msw_text_width");
     if (!utf8) {
         return 0;
     }

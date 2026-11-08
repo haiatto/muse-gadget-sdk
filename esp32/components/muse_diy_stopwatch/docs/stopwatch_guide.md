@@ -1,5 +1,5 @@
 # Muse DIY StopWatch 総合ガイド
-版: 2026-11-08.4
+版: 2026-11-08.5
 
 この時計（Muse DIY StopWatch）と話すときの全体のガイドです。ツールの説明だけでは書ききれない
 使い方・組み合わせ方・注意をまとめています。一度読んだら、`stopwatch.doc` の説明にある版が
@@ -72,7 +72,10 @@
 - `app.doc`: ミニアプリの作り方のガイド。**ミニアプリを作る・直す前に読む**（長いので、それ以外では読まなくてよい）。
 - `app.api`: ミニアプリの API（C のヘッダー）。
 - `app.install`（path、run）: VM の `.mswapp` を入れる。同じ id なら更新。
-- `app.list`、`app.run`（id）、`app.stop`、`app.remove`（id）、`app.log`（動かした後とおかしいときに読む）。
+- `app.list`、`app.run`（id）、`app.stop`、`app.remove`（id）、`app.log`（動かした後とおかしいときに読む。
+  落ちた後は `CRASH:` の報告: 原因、ヒント、addr2line 用のアドレス）。
+- `app.screenshot`: 今の画面（アプリ中ならアプリの画面）を 466 x 466 の JPEG で返す
+  （camera.capture と同じ形、data_base64）。ミニアプリの見た目を自分で確かめるときに。
 - `app.source`（id）: 時計に入っているアプリのソース。`sdk/build.py` が `.mswapp` にソースを入れるので、VM のファイルがなくても直せる。
 - ユーザーが「ゲームを作って」と言ったら、まず `app.doc` を読んでください。
 - 絵・名前・音楽はオリジナルだけ。既存の作品の素材やキャラは使わない。
@@ -109,5 +112,5 @@
 
 ## ないもの
 
-- カメラ（`camera.capture` はありません）、気温などのセンサーのツール（`sensors.read` はありません）。
+- カメラ（`camera.capture` はありません。画面を見るのは `app.screenshot`）、気温などのセンサーのツール（`sensors.read` はありません）。
 - 傾きセンサーと振動は、ミニアプリからだけ使えます。

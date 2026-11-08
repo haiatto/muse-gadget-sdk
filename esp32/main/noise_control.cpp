@@ -1661,9 +1661,25 @@ static char *build_register_json(void) {
                     "Error no_source: the app was built before sdk/build.py kept the source.",
                     src_req, src_opt);
         add_command(commands, "app.log",
-                    "The mini-app log: msw_log lines, load errors, crashes, what was "
-                    "freed. Read it after app.run and whenever an app misbehaves.",
+                    "The mini-app log: msw_log lines, load errors, what was freed, slow or "
+                    "stuck ticks, bad pointers given to the firmware, and after a crash a "
+                    "report (lines starting CRASH:): the fault in words, a hint, and a "
+                    "backtrace whose app lines give ELF addresses for addr2line on the app's "
+                    "build/<id>.elf. Read it after app.run and whenever an app misbehaves.",
                     nullptr, nullptr);
+        cJSON *shot_opt = cJSON_CreateObject();
+        cJSON *quality = cJSON_CreateObject();
+        cJSON_AddStringToObject(quality, "type", "integer");
+        cJSON_AddStringToObject(quality, "description", "JPEG quality 10-95 (default 70).");
+        cJSON_AddItemToObject(shot_opt, "quality", quality);
+        add_command(commands, "app.screenshot",
+                    "What the watch screen shows now (the running mini app, or the watch's own "
+                    "screen), as a 466x466 JPEG in base64 (format jpeg-base64, data_base64). "
+                    "The screen is round: only the circle is seen, the corners mean nothing. "
+                    "Use it to check a mini app's layout and drawing yourself; call it only when needed.",
+                    nullptr, shot_opt);
+        cJSON_AddNumberToObject(
+            cJSON_GetObjectItem(commands, "app.screenshot"), "timeout_ms", 20000);
     }
 
 #if CONFIG_HOMEHUB_SENSECAP_SENSORS

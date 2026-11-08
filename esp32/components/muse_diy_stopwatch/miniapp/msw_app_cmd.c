@@ -8,6 +8,7 @@
  *   app.run     start an app by id          app.stop   end the running one
  *   app.remove  delete an app by id         app.log    the app log
  *   app.source  the app's files kept in its package (sdk/build.py adds them)
+ *   app.screenshot  the screen as a JPEG, base64 (like camera.capture)
  *   app.install is async: main/app.c fetches the file from the VM and hands
  *               it to msw_app_install_json.
  *
@@ -19,6 +20,7 @@
 #include "cJSON.h"
 #include "esp_heap_caps.h"
 #include "esp_attr.h"
+#include "mbedtls/base64.h"
 #include "msw_app_priv.h"
 
 extern const char guide_md_start[] asm("_binary_guide_md_start");
@@ -140,6 +142,43 @@ cJSON *msw_app_install_json(const uint8_t *data, size_t n, bool run)
     return r;
 }
 
+uint8_t *msw_app_screenshot(int quality, size_t *n, const char **source, const char **why, int *ms);
+
+static cJSON *screenshot(const cJSON *params)
+{
+    const cJSON *q = params ? cJSON_GetObjectItemCaseSensitive(params, "quality") : NULL;
+    size_t n;
+    const char *source = "", *why = NULL;
+    int ms = 0;
+    uint8_t *jpg = msw_app_screenshot(cJSON_IsNumber(q) ? q->valueint : 70, &n, &source, &why, &ms);
+    if (!jpg) {
+        return fail(why ? why : "failed", why && !strcmp(why, "out_of_memory") ? "out of memory" : "could not take the picture");
+    }
+    size_t cap = (n + 2) / 3 * 4 + 1, len = 0;
+    unsigned char *b64 = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
+    if (!b64 || mbedtls_base64_encode(b64, cap, &len, jpg, n) != 0) {
+        free(jpg);
+        free(b64);
+        return fail("out_of_memory", "out of memory");
+    }
+    free(jpg);
+    cJSON *payload;
+    cJSON *r = ok_payload(&payload);
+    cJSON_AddStringToObject(payload, "format", "jpeg-base64");
+    cJSON_AddStringToObject(payload, "data_base64", (const char *)b64);
+    free(b64);
+    cJSON_AddNumberToObject(payload, "width", MSW_SCREEN_W);
+    cJSON_AddNumberToObject(payload, "height", MSW_SCREEN_H);
+    cJSON_AddNumberToObject(payload, "bytes", (double)n);
+    cJSON_AddStringToObject(payload, "source", source);
+    const char *running = msw_app_running();
+    if (running) {
+        cJSON_AddStringToObject(payload, "app", running);
+    }
+    cJSON_AddNumberToObject(payload, "ms", ms);
+    return r;
+}
+
 /* NULL: not an app.* command this handles (app.install is main/app.c's). */
 cJSON *msw_app_command(const char *command, const cJSON *params)
 {
@@ -208,6 +247,9 @@ cJSON *msw_app_command(const char *command, const cJSON *params)
         cJSON *r = page(text, text + strlen(text), params);
         free(text);
         return r;
+    }
+    if (!strcmp(c, "screenshot")) {
+        return screenshot(params);
     }
     if (!strcmp(c, "log")) {
         char *buf = heap_caps_malloc(8192, MALLOC_CAP_SPIRAM);

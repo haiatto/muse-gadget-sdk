@@ -7,7 +7,8 @@ set(srcs)
 set(embed)
 if(CONFIG_MUSE_BOARD_M5STACK_STOPWATCH)
     set(srcs "msw_app_core.c" "msw_app_api.c" "msw_app_gfx.c" "msw_app_sound.c"
-             "msw_app_launcher.c" "msw_app_cmd.c" "msw_app_menu.c" "msw_app_exports.c")
+             "msw_app_launcher.c" "msw_app_cmd.c" "msw_app_menu.c" "msw_app_exports.c"
+             "msw_app_crash.c" "msw_app_shot.c")
     set(embed "guide.md" "include/msw_app.h")
 endif()
 
@@ -15,7 +16,7 @@ idf_component_register(
     SRCS ${srcs}
     INCLUDE_DIRS "include"
     EMBED_TXTFILES ${embed}
-    PRIV_REQUIRES muse ui fatfs wear_levelling esp_partition esp_timer mbedtls vfs esp_hw_support
+    PRIV_REQUIRES muse ui fatfs wear_levelling esp_partition esp_timer mbedtls vfs esp_hw_support esp_app_format
 )
 
 if(CONFIG_MUSE_BOARD_M5STACK_STOPWATCH)
@@ -23,7 +24,9 @@ if(CONFIG_MUSE_BOARD_M5STACK_STOPWATCH)
     # main/app.c); make the linker take them from this archive.
     target_link_libraries(${COMPONENT_LIB} INTERFACE
         "-u msw_launcher_build" "-u msw_app_button" "-u msw_app_blue" "-u msw_app_command"
-        "-u msw_app_install_json" "-u msw_app_muse_reply")
+        "-u msw_app_install_json" "-u msw_app_muse_reply"
+        # The crash report (msw_app_crash.c) sees each panic before IDF's handler.
+        "-Wl,--wrap=esp_panic_handler")
     # Apps call into lvgl and libc by address: keep every exported symbol.
     target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-unused-function -Wno-format-truncation)
     # The table declares every symbol bare, as void f(void): only addresses are taken.

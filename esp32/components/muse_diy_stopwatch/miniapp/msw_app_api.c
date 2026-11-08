@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "esp_heap_caps.h"
+#include "esp_memory_utils.h"
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -163,7 +164,21 @@ static void free_all_blocks(void)
 /* ---- life ------------------------------------------------------------------- */
 
 static char s_id[MSW_APP_ID_MAX];
-static uintptr_t s_code_lo, s_code_hi;
+static uintptr_t s_code_lo, s_code_hi, s_code_d;
+/* elf_loader rounds .text up to 4 bytes when mapping, so a .rodata that
+ * starts right after an odd-sized .text has its first bytes relocated into
+ * the code (old builds; sdk/build.py now aligns .rodata). Such pointers are
+ * sent to the real .rodata copy. */
+static uintptr_t s_text_vaddr, s_ro_vaddr, s_ro_addr;
+static size_t s_ro_size;
+
+void msw_api_set_rodata(uintptr_t text_vaddr, uintptr_t ro_vaddr, size_t ro_size, uintptr_t ro_addr)
+{
+    s_text_vaddr = text_vaddr;
+    s_ro_vaddr = ro_vaddr;
+    s_ro_size = ro_size;
+    s_ro_addr = ro_addr;
+}
 static int64_t s_start_us;
 static int s_fps = 30;
 static atomic_bool s_exit;
@@ -222,6 +237,10 @@ uint32_t msw_random(void)
 void msw_log(const char *fmt, ...)
 {
     char line[112];
+    fmt = msw_api_readable(fmt, 1, "msw_log");
+    if (!fmt) {
+        return;
+    }
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(line, sizeof(line), fmt, ap);
@@ -375,11 +394,91 @@ static void drop_app_callbacks(void)
 
 static void overlay_reset(void);
 
-void msw_api_begin(const char *id, uintptr_t code_lo, uintptr_t code_hi)
+/* ---- pointers from the app ----------------------------------------------------- */
+
+#define WARNED_MAX 8
+static const char *s_warned[WARNED_MAX];   /* fn names already logged this run */
+
+static bool warn_once(const char *fn)
+{
+    for (int i = 0; i < WARNED_MAX; i++) {
+        if (s_warned[i] == fn) {
+            return false;
+        }
+        if (!s_warned[i]) {
+            s_warned[i] = fn;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool firmware_can_read(uintptr_t a)
+{
+    const void *p = (const void *)a;
+    return esp_ptr_byte_accessible(p) || esp_ptr_external_ram(p) || esp_ptr_in_drom(p);
+}
+
+const void *msw_api_readable(const void *p, size_t n, const char *fn)
+{
+    uintptr_t a = (uintptr_t)p;
+    if (!p) {
+        return NULL;
+    }
+    n = n ? n : 1;
+    if (s_code_d && a >= s_code_lo && a < s_code_hi) {
+        uintptr_t v = s_text_vaddr + (a - s_code_lo);
+        if (s_ro_addr && v >= s_ro_vaddr && v - s_ro_vaddr < s_ro_size) {
+            if (warn_once(fn)) {
+                msw_app_logf("%s: %s got a .rodata pointer the loader put in the code (0x%08x); "
+                             "read from .rodata. Rebuild the app with the latest sdk/build.py",
+                             s_id, fn, (unsigned)a);
+            }
+            return (const void *)(s_ro_addr + (v - s_ro_vaddr));
+        }
+        if (warn_once(fn)) {
+            msw_app_logf("%s: %s got a pointer into the app's code (0x%08x, offset 0x%x), read through its data copy; "
+                         "data in code is slow and not readable by every function",
+                         s_id, fn, (unsigned)a, (unsigned)(a - s_code_lo));
+        }
+        return (const void *)(a - s_code_lo + s_code_d);
+    }
+    if (!firmware_can_read(a) || !firmware_can_read(a + n - 1)) {
+        if (warn_once(fn)) {
+            msw_app_logf("%s: %s got a pointer it can't read (0x%08x): a bad or freed pointer? ignored",
+                         s_id, fn, (unsigned)a);
+        }
+        return NULL;
+    }
+    return p;
+}
+
+void *msw_api_writable(void *p, size_t n, const char *fn)
+{
+    uintptr_t a = (uintptr_t)p;
+    if (!p) {
+        return NULL;
+    }
+    n = n ? n : 1;
+    const void *e = (const void *)(a + n - 1);
+    bool ok = (esp_ptr_byte_accessible(p) || esp_ptr_external_ram(p)) && (esp_ptr_byte_accessible(e) || esp_ptr_external_ram(e));
+    if (!ok || (a >= s_code_d && a < s_code_d + (s_code_hi - s_code_lo))) {
+        if (warn_once(fn)) {
+            msw_app_logf("%s: %s got a pointer it can't write (0x%08x): a bad pointer, or a const array? ignored",
+                         s_id, fn, (unsigned)a);
+        }
+        return NULL;
+    }
+    return p;
+}
+
+void msw_api_begin(const char *id, uintptr_t code_lo, uintptr_t code_hi, uintptr_t code_d)
 {
     strlcpy(s_id, id, sizeof(s_id));
     s_code_lo = code_lo;
     s_code_hi = code_hi;
+    s_code_d = code_d;
+    memset(s_warned, 0, sizeof(s_warned));
     s_start_us = esp_timer_get_time();
     s_fps = 30;
     atomic_store(&s_exit, false);
@@ -401,6 +500,7 @@ void msw_api_begin(const char *id, uintptr_t code_lo, uintptr_t code_hi)
 
 void msw_api_end(void)
 {
+    s_code_d = 0;
     msw_gfx_end();
     overlay_reset();
     drop_app_callbacks();
@@ -627,7 +727,9 @@ static void store_io(void *arg)
  * flash, and app memory is in PSRAM. */
 bool msw_store_put(const char *key, const void *data, size_t n)
 {
-    if (!valid_key(key) || n > 4096 || (!data && n)) {
+    key = msw_api_readable(key, 1, "msw_store_put");
+    data = n ? msw_api_readable(data, n, "msw_store_put") : data;
+    if (!key || !valid_key(key) || n > 4096 || (!data && n)) {
         msw_log("store_put: bad key or more than 4 KB");
         return false;
     }
@@ -644,7 +746,9 @@ bool msw_store_put(const char *key, const void *data, size_t n)
 
 int msw_store_get(const char *key, void *data, size_t cap)
 {
-    if (!valid_key(key)) {
+    key = msw_api_readable(key, 1, "msw_store_get");
+    data = cap ? msw_api_writable(data, cap > 4096 ? 4096 : cap, "msw_store_get") : data;
+    if (!key || !valid_key(key) || (cap && !data)) {
         return -1;
     }
     size_t n = cap > 4096 ? 4096 : cap;
@@ -668,6 +772,7 @@ const char *msw_say(const char *text)
     if (!msw_tts_say) {
         return "no_voice";
     }
+    text = msw_api_readable(text, 1, "msw_say");
     return msw_tts_say(text);
 }
 
@@ -809,6 +914,7 @@ void msw_avatar_hide(void)
 
 void msw_bubble(const char *text, int ms)
 {
+    text = msw_api_readable(text, 1, "msw_bubble");
     if (!text || !text[0]) {
         s_bub_until = 0;
         if (s_bub_obj) {

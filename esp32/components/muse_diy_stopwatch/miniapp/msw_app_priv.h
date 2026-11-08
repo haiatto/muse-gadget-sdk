@@ -75,9 +75,20 @@ char *msw_app_source(const char *id, const char **code);
 void msw_app_service(void (*fn)(void *arg), void *arg);
 
 /* ---- api (msw_app_api.c) ---- */
-/* Before app_main; code_lo..code_hi is the app's loaded code (timers and
- * animations calling into it are removed when it ends). */
-void msw_api_begin(const char *id, uintptr_t code_lo, uintptr_t code_hi);
+/* Before app_main; code_lo..code_hi is the app's loaded code on the
+ * instruction bus (timers and animations calling into it are removed when it
+ * ends), code_d the same bytes on the data bus (readable byte by byte). */
+void msw_api_begin(const char *id, uintptr_t code_lo, uintptr_t code_hi, uintptr_t code_d);
+/* An app's pointer the firmware will read n bytes from (for strings, n = 1):
+ * one into the app's code is turned into its data-bus copy, one the firmware
+ * can't read gives NULL. Either is logged once per fn while the app runs. */
+const void *msw_api_readable(const void *p, size_t n, const char *fn);
+void *msw_api_writable(void *p, size_t n, const char *fn);
+void msw_api_set_rodata(uintptr_t text_vaddr, uintptr_t ro_vaddr, size_t ro_size, uintptr_t ro_addr);
+
+/* ---- crash report (msw_app_crash.c) ---- */
+void msw_crash_app(const char *id, uintptr_t code_lo, uintptr_t code_hi, uintptr_t text_vaddr);   /* NULL: none */
+void msw_crash_boot_report(void);            /* once at start: a crash record to app.log */
 void msw_api_end(void);                      /* after the exit callback: frees all */
 void msw_api_tick(uint32_t now_ms);          /* each loop of the app task, locked */
 void msw_api_button(int button, bool down);  /* queued from the input task */

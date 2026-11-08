@@ -268,6 +268,7 @@ bool msw_sound_busy(int ch)
 
 int msw_pcm_write(const int16_t *mono, int n)
 {
+    mono = n > 0 ? msw_api_readable(mono, (size_t)n * 2, "msw_pcm_write") : NULL;
     if (!mono || n <= 0 || !atomic_load(&s_app)) {
         return 0;
     }

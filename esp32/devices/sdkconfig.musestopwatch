@@ -23,3 +23,6 @@ CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 # tracked one, freed when the app ends.
 # CONFIG_ELF_LOADER_LIBC_SYMBOLS is not set
 # CONFIG_ELF_LOADER_ESPIDF_SYMBOLS is not set
+
+# museStopWatch: app.screenshot draws lvgl screens into a buffer (msw_app_shot.c).
+CONFIG_LV_USE_SNAPSHOT=y
