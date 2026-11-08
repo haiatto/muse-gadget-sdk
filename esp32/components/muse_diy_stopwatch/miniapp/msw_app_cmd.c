@@ -10,7 +10,8 @@
  *   app.install is async: main/app.c fetches the file from the VM and hands
  *               it to msw_app_install_json.
  *
- * Long texts come in pages: pass "offset" from the last reply's "next".
+ * app.doc and app.api return the whole text (up to PAGE bytes; the reply is
+ * sent in chunks). Past PAGE they page: pass "offset" from the last "next".
  */
 #include <string.h>
 
@@ -23,7 +24,7 @@ extern const char guide_md_end[] asm("_binary_guide_md_end");
 extern const char msw_app_h_start[] asm("_binary_msw_app_h_start");
 extern const char msw_app_h_end[] asm("_binary_msw_app_h_end");
 
-#define PAGE 6000
+#define PAGE (64 * 1024)   /* the guide is ~12 KB, the header ~11 KB */
 
 static cJSON *ok_payload(cJSON **payload)
 {

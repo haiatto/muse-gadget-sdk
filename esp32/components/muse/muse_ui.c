@@ -133,7 +133,7 @@ bool muse_ui_face_active(void)
     return s_face_active;
 }
 static lv_obj_t *s_settings;
-/* museStopWatch: the mini-app launcher, left of the face (components/miniapp). */
+/* museStopWatch: the mini-app launcher, left of the face (components/muse_diy_stopwatch/miniapp). */
 static lv_obj_t *s_launcher;
 void msw_launcher_build(lv_obj_t *tile) __attribute__((weak));
 #define TILES 3

@@ -68,7 +68,7 @@
 #include "freertos/task.h"
 #include "lwip/sockets.h"
 
-// museStopWatch: mini apps (components/miniapp); NULL when not linked in.
+// museStopWatch: mini apps (components/muse_diy_stopwatch/miniapp); NULL when not linked in.
 extern "C" void msw_app_muse_reply(const char *text) __attribute__((weak));
 
 extern "C" {

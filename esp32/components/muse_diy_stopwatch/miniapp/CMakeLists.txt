@@ -15,7 +15,7 @@ idf_component_register(
     SRCS ${srcs}
     INCLUDE_DIRS "include"
     EMBED_TXTFILES ${embed}
-    PRIV_REQUIRES muse fatfs wear_levelling esp_partition esp_timer mbedtls vfs esp_hw_support
+    PRIV_REQUIRES muse ui fatfs wear_levelling esp_partition esp_timer mbedtls vfs esp_hw_support
 )
 
 if(CONFIG_MUSE_BOARD_M5STACK_STOPWATCH)

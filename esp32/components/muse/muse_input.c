@@ -645,7 +645,7 @@ static void dedicated_buttons(unsigned ev)
     }
 #endif
     /* museStopWatch: while a mini app runs, the speaker button (yellow) opens
-     * the app menu (components/miniapp). */
+     * the app menu (components/muse_diy_stopwatch/miniapp). */
     {
         extern bool msw_app_button(bool down) __attribute__((weak));
         bool took = false;
@@ -697,7 +697,7 @@ static void input_task(void *arg)
                      ev & MUSE_BTN_TALK_RELEASE ? " release" : "");
 #if !CONFIG_MUSE_BOARD_SENSECAP_WATCHER
             /* museStopWatch: while a mini app runs, the talk button (blue)
-             * is the app's (components/miniapp); a talk already held
+             * is the app's (components/muse_diy_stopwatch/miniapp); a talk already held
              * finishes first. */
             extern bool msw_app_blue(bool down) __attribute__((weak));
             bool app_took = false;

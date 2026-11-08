@@ -1178,7 +1178,7 @@ const muse_board_t *muse_board_get(void)
     return &s_board;
 }
 
-/* ---- museStopWatch: IMU and vibration for mini apps (components/miniapp) ----
+/* ---- museStopWatch: IMU and vibration for mini apps (components/muse_diy_stopwatch/miniapp) ----
  * The BMI270 rests after boot (imu_rest). msw_board_imu_start loads its
  * configuration file, which its own microcontroller needs before the
  * accelerometer and gyroscope run (Bosch's datasheet, "initialization"), then

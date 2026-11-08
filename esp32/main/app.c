@@ -1941,10 +1941,10 @@ static cJSON *bug_report_command(
 
 #endif  // CONFIG_HOMEHUB_BLE_COMMANDS
 
-/* museStopWatch: on-device Japanese speech (components/sanotts); NULL when not linked in. */
+/* museStopWatch: on-device Japanese speech (components/muse_diy_stopwatch/sanotts); NULL when not linked in. */
 extern const char *msw_tts_say(const char *text) __attribute__((weak));
 extern void msw_tts_stop(void) __attribute__((weak));
-/* museStopWatch: mini apps (components/miniapp); NULL when not linked in. */
+/* museStopWatch: mini apps (components/muse_diy_stopwatch/miniapp); NULL when not linked in. */
 extern cJSON *msw_app_command(const char *command, const cJSON *params) __attribute__((weak));
 extern cJSON *msw_app_install_json(const uint8_t *data, size_t n, bool run) __attribute__((weak));
 
@@ -2037,7 +2037,7 @@ static cJSON *on_ws_command(
         return voice_configure_command(params);
     }
 #endif
-    /* museStopWatch: mini apps (components/miniapp). */
+    /* museStopWatch: mini apps (components/muse_diy_stopwatch/miniapp). */
 #if CONFIG_HOMEHUB_DISPLAY_COMMANDS
     if (msw_app_install_json && strcmp(command, "app.install") == 0) {
         cJSON *path = cJSON_GetObjectItem(params, "path");
@@ -2064,7 +2064,7 @@ static cJSON *on_ws_command(
         cJSON *r = msw_app_command(command, params);
         if (r) return r;
     }
-    /* museStopWatch: on-device Japanese speech (components/sanotts, msw_tts.c). */
+    /* museStopWatch: on-device Japanese speech (components/muse_diy_stopwatch/sanotts, msw_tts.c). */
     if (msw_tts_say && strcmp(command, "voice.say") == 0) {
         cJSON *text = cJSON_GetObjectItem(params, "text");
         const char *why = msw_tts_say(cJSON_IsString(text) ? text->valuestring : NULL);

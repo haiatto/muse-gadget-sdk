@@ -45,8 +45,6 @@ if(CONFIG_MUSE_ENABLED)
         list(APPEND embed "eink/fonts/montserrat.ttf" "eink/fonts/symbols.ttf" "eink/fonts/unscii.ttf")
     else()
         list(APPEND srcs "muse_ui.c" "muse_menu.c" "muse_settings_ui.c" "muse_keypad.c" "muse_lv_mem.c")
-        list(APPEND srcs "msw_net.c" "msw_text.c" "msw_side.c" "msw_mem.c")   # museStopWatch: AP mode and Web page, Japanese labels
-        list(APPEND embed "msw_web.html")
     endif()
     if(CONFIG_MUSE_HATCH)
         list(APPEND srcs "muse_chat.c" "muse_account_api.c" "muse_chat_session.cpp")
@@ -205,7 +203,9 @@ set(muse_priv_requires
     # before Kconfig values exist, so these can't depend on it; only the code does.
     fatfs esp_driver_sdspi sdmmc)
 list(APPEND muse_priv_requires camera)
-list(APPEND muse_priv_requires esp_http_server)   # museStopWatch: msw_net.c
+# museStopWatch: AP, Web settings, QR and side-chat pages, Japanese labels
+# (components/muse_diy_stopwatch/ui; muse_settings_ui.c includes its pages).
+list(APPEND muse_priv_requires ui)
 # The P4 camera's JPEG encoder; Kconfig is not loaded yet when requirements expand.
 if(IDF_TARGET STREQUAL "esp32p4")
     list(APPEND muse_priv_requires esp_driver_jpeg)

@@ -62,9 +62,9 @@ extern "C" {
 #include <xplat/noise/core/ServiceCodec.h>
 #include "msw_stack.h"   // museStopWatch: PSRAM task stacks
 
-// museStopWatch: on-device Japanese speech (components/sanotts); NULL when not linked in.
+// museStopWatch: on-device Japanese speech (components/muse_diy_stopwatch/sanotts); NULL when not linked in.
 extern "C" const char *msw_tts_say(const char *text) __attribute__((weak));
-// museStopWatch: mini apps (components/miniapp); NULL when not linked in.
+// museStopWatch: mini apps (components/muse_diy_stopwatch/miniapp); NULL when not linked in.
 extern "C" cJSON *msw_app_command(const char *command, const cJSON *params) __attribute__((weak));
 
 using namespace musegadgets::noise::core;
@@ -1362,6 +1362,24 @@ static cJSON *row_params(void) {
 }
 #endif
 
+#ifndef MUSE_REGISTER_JSON_MAX
+#if CONFIG_MUSE_BOARD_M5STACK_STOPWATCH
+/* museStopWatch: the VM takes up to 256 KB per device message; 8192 is the
+ * official buffer, sized for boards without PSRAM (as kantanMuse found). */
+#define MUSE_REGISTER_JSON_MAX (256 * 1024)
+#else
+#define MUSE_REGISTER_JSON_MAX 8192
+#endif
+#endif
+// Official: 512-byte steps up to 8192. Past 8192 (museStopWatch) the buffer
+// grows by half each try, so a large catalogue is not reprinted many times.
+static int next_register_json_size(int size) {
+    if (size < 8192) return size + 512;
+    if (size >= MUSE_REGISTER_JSON_MAX) return MUSE_REGISTER_JSON_MAX + 1;
+    int next = size + size / 2;
+    return next > MUSE_REGISTER_JSON_MAX ? MUSE_REGISTER_JSON_MAX : next;
+}
+
 static void add_command(cJSON *commands, const char *name,
                         const char *description,
                         cJSON *required, cJSON *optional) {
@@ -1586,13 +1604,13 @@ static char *build_register_json(void) {
                     "READ THIS FIRST before making, installing or fixing a mini app. "
                     "Mini apps are small C programs (games, tools) you build on your VM "
                     "and run on this watch. Returns the guide (Markdown): how to build, "
-                    "install, test and debug, patterns and pitfalls. Long: pages; pass "
-                    "offset = next until there is no next.",
+                    "install, test and debug, patterns and pitfalls (in Japanese). One reply "
+                    "holds it all; if a reply has next, call again with offset = next.",
                     nullptr, offset);
         cJSON *offset2 = cJSON_Duplicate(offset, true);
         add_command(commands, "app.api",
                     "The mini-app API header (msw_app.h, C) the guide refers to. "
-                    "Pages like app.doc.",
+                    "Whole, like app.doc.",
                     nullptr, offset2);
 #if CONFIG_HOMEHUB_DISPLAY_COMMANDS
         cJSON *inst = cJSON_CreateObject();
@@ -1691,8 +1709,11 @@ static char *build_register_json(void) {
     // heap. Right after the handshake there is often not that much, so print
     // into one buffer sized to fit instead.
     char *json = nullptr;
-    for (int size = 2048; size <= 8192 && !json; size += 512) {
-        json = (char *)malloc(size);
+    for (int size = 2048; size <= MUSE_REGISTER_JSON_MAX && !json;
+         size = next_register_json_size(size)) {
+        /* museStopWatch: past 8 KB, PSRAM */
+        json = size > 8192 ? (char *)heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : nullptr;
+        if (!json) json = (char *)malloc(size);
         if (!json) break;
         if (!cJSON_PrintPreallocated(root, json, size, false)) {
             free(json);
@@ -2280,6 +2301,9 @@ static session_result_t run_session(stack_monitor_t *stack) {
         }
         control_tx = {reg_json, strlen(reg_json), 0, false, session_generation};
         control_tx.is_registration = true;
+        /* museStopWatch: how close the catalogue is to MUSE_REGISTER_JSON_MAX */
+        ESP_LOGI(TAG, "link.register %u bytes (max %u)", (unsigned)strlen(reg_json),
+                 (unsigned)MUSE_REGISTER_JSON_MAX);
     }
 
     // Switch to non-blocking for the event loop
