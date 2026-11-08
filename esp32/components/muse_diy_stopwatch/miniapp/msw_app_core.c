@@ -130,8 +130,18 @@ static void svc_task(void *arg)
     for (;;) {
         if (xQueueReceive(s_svc_q, &r, portMAX_DELAY) == pdTRUE) {
             r.fn(r.arg);
-            xSemaphoreGive(r.done);
+            if (r.done) {
+                xSemaphoreGive(r.done);
+            }
         }
+    }
+}
+
+void msw_app_service_async(void (*fn)(void *arg), void *arg)
+{
+    svc_req_t r = { fn, arg, NULL };
+    if (s_svc_q) {
+        xQueueSend(s_svc_q, &r, 0);
     }
 }
 
@@ -304,8 +314,9 @@ typedef struct __attribute__((packed)) {
 } elf_sym_t;
 
 /* Every symbol the ELF needs must be one the firmware gives. On failure,
- * msg lists the missing ones. */
-static bool check_symbols(const uint8_t *elf, size_t n, char *msg, size_t msg_len)
+ * msg lists the missing ones. An avatar (idea 009) runs inside the screen's
+ * drawing, so of the msw_* functions it may use msw_avatar_define only. */
+static bool check_symbols(const uint8_t *elf, size_t n, bool avatar, char *msg, size_t msg_len)
 {
     const elf_ehdr_t *eh = (const elf_ehdr_t *)elf;
     if (n < sizeof(*eh) || memcmp(eh->ident, "\x7f" "ELF", 4) || eh->machine != 94 /* Xtensa */) {
@@ -335,6 +346,10 @@ static bool check_symbols(const uint8_t *elf, size_t n, char *msg, size_t msg_le
                 continue;
             }
             const char *name = (const char *)elf + str->offset + sym[k].name;
+            if (avatar && !strncmp(name, "msw_", 4) && strcmp(name, "msw_avatar_define")) {
+                snprintf(msg, msg_len, "an avatar can't call %s: of the msw_ functions only msw_avatar_define", name);
+                return false;
+            }
             if (!name[0] || esp_elf_find_symbol(name)) {
                 continue;
             }
@@ -391,6 +406,10 @@ static void read_source(void *arg)
     app_path(path, sizeof(path), q->id, "mswapp");
     q->code = "not_found";
     FILE *f = s_mounted ? fopen(path, "rb") : NULL;
+    if (!f && s_mounted) {
+        app_path(path, sizeof(path), q->id, "mswava");   /* an avatar */
+        f = fopen(path, "rb");
+    }
     if (!f) {
         return;
     }
@@ -433,7 +452,8 @@ static bool check_package(const uint8_t *data, size_t n, const char **code, char
 {
     const msw_app_pkg_t *h = (const msw_app_pkg_t *)data;
     *code = "bad_format";
-    if (n < sizeof(*h) || memcmp(h->magic, "MSWA", 4)) {
+    bool avatar = n >= sizeof(*h) && !memcmp(h->magic, "MSWV", 4);
+    if (n < sizeof(*h) || (memcmp(h->magic, "MSWA", 4) && !avatar)) {
         snprintf(msg, msg_len, "not a mini-app package (.mswapp)");
         return false;
     }
@@ -458,7 +478,7 @@ static bool check_package(const uint8_t *data, size_t n, const char **code, char
         snprintf(msg, msg_len, "built for API %u; this firmware has API %d", h->api, MSW_API_VERSION);
         return false;
     }
-    if (!check_symbols(data + sizeof(*h) + h->icon_size, h->elf_size, msg, msg_len)) {
+    if (!check_symbols(data + sizeof(*h) + h->icon_size, h->elf_size, avatar, msg, msg_len)) {
         *code = "missing_symbol";
         return false;
     }
@@ -472,6 +492,7 @@ typedef struct {
     const uint8_t *data;
     size_t n;
     const char *id;
+    bool avatar;        /* an avatar's package: <id>.mswava */
     bool ok;
     const char *code;   /* why not: no_space (default) or too_many_apps */
     char err[96];
@@ -488,15 +509,15 @@ bool msw_app_space(uint32_t *total, uint32_t *free_bytes)
     return true;
 }
 
-/* Installed packages, up to MSW_APP_MAX_APPS. */
-static int count_packages(void)
+/* Installed packages of one kind (".mswapp" or ".mswava"), up to max. */
+static int count_packages(const char *ext, int max)
 {
     int n = 0;
     DIR *d = opendir(MSW_APP_DIR);
     struct dirent *e;
-    while (d && (e = readdir(d)) && n < MSW_APP_MAX_APPS) {
+    while (d && (e = readdir(d)) && n < max) {
         const char *dot = strrchr(e->d_name, '.');
-        n += dot && !strcmp(dot, ".mswapp");
+        n += dot && !strcmp(dot, ext);
     }
     if (d) {
         closedir(d);
@@ -509,15 +530,17 @@ static void write_package(void *arg)
     write_req_t *r = arg;
     char tmp[64], path[64];
     app_path(tmp, sizeof(tmp), r->id, "tmp");
-    app_path(path, sizeof(path), r->id, "mswapp");
+    app_path(path, sizeof(path), r->id, r->avatar ? "mswava" : "mswapp");
     /* Say why before writing, so Muse can make room: the launcher and
      * app.list show MSW_APP_MAX_APPS apps at most, and an update is written
      * beside the old package before it replaces it. */
     struct stat st;
     bool update = s_mounted && stat(path, &st) == 0;
-    if (s_mounted && !update && count_packages() >= MSW_APP_MAX_APPS) {
+    int max = r->avatar ? MSW_AVATAR_MAX : MSW_APP_MAX_APPS;
+    if (s_mounted && !update && count_packages(r->avatar ? ".mswava" : ".mswapp", max) >= max) {
         r->code = "too_many_apps";
-        snprintf(r->err, sizeof(r->err), "%d apps already: remove one first (app.remove)", MSW_APP_MAX_APPS);
+        snprintf(r->err, sizeof(r->err), "%d %s already: remove one first (app.remove)", max,
+                 r->avatar ? "avatars" : "apps");
         return;
     }
     uint32_t total, free_bytes;
@@ -544,7 +567,9 @@ static void write_package(void *arg)
         return;
     }
     r->ok = true;
-    rescan(NULL);
+    if (!r->avatar) {
+        rescan(NULL);
+    }
 }
 
 bool msw_app_install(const uint8_t *data, size_t n, char *id_out, uint16_t *ver_out,
@@ -557,14 +582,15 @@ bool msw_app_install(const uint8_t *data, size_t n, char *id_out, uint16_t *ver_
     char id[MSW_APP_ID_MAX];
     memcpy(id, h->id, sizeof(id));
     id[sizeof(id) - 1] = '\0';
-    const char *running = msw_app_running();
+    bool avatar = !memcmp(h->magic, "MSWV", 4);
+    const char *running = avatar ? NULL : msw_app_running();
     if (running && !strcmp(running, id)) {
         msw_app_stop();
         for (int i = 0; i < 300 && msw_app_running(); i++) {
             vTaskDelay(pdMS_TO_TICKS(10));
         }
     }
-    write_req_t r = { .data = data, .n = n, .id = id, .code = "no_space" };
+    write_req_t r = { .data = data, .n = n, .id = id, .avatar = avatar, .code = "no_space" };
     msw_app_service(write_package, &r);
     if (!r.ok) {
         *code = r.code;
@@ -577,8 +603,12 @@ bool msw_app_install(const uint8_t *data, size_t n, char *id_out, uint16_t *ver_
     if (ver_out) {
         *ver_out = h->ver;
     }
-    msw_app_logf("installed %s v%u (%u bytes)", id, h->ver, (unsigned)n);
-    msw_launcher_refresh();
+    msw_app_logf("installed %s%s v%u (%u bytes)", avatar ? "avatar " : "", id, h->ver, (unsigned)n);
+    if (avatar) {
+        msw_avatar_installed(id);
+    } else {
+        msw_launcher_refresh();
+    }
     return true;
 }
 
@@ -593,6 +623,8 @@ static void remove_package(void *arg)
     char path[64];
     app_path(path, sizeof(path), r->id, "mswapp");
     r->ok = unlink(path) == 0;
+    app_path(path, sizeof(path), r->id, "mswava");
+    r->ok = unlink(path) == 0 || r->ok;
     char dir[64];
     snprintf(dir, sizeof(dir), MSW_APP_DIR "/data/%s", r->id);
     DIR *d = opendir(dir);
@@ -621,11 +653,13 @@ bool msw_app_remove(const char *id)
             vTaskDelay(pdMS_TO_TICKS(10));
         }
     }
+    msw_avatar_removing(id);    /* the avatar on screen goes first */
     remove_req_t r = { .id = id };
     msw_app_service(remove_package, &r);
     if (r.ok) {
         msw_app_logf("removed %s", id);
         msw_launcher_refresh();
+        msw_avatar_installed(NULL);   /* the avatar picker's list */
     }
     return r.ok;
 }
@@ -955,17 +989,18 @@ static void app_task(void *arg)
     vTaskDelete(NULL);
 }
 
-/* Reads, checks and relocates the app. On the service task. */
-static void load(void *arg)
+/* Reads, checks and relocates the package's ELF into elf. On the service
+ * task. */
+static bool load_elf(const char *id, bool avatar, esp_elf_t *elf, char *name, const char **code,
+                     char *err, size_t err_len)
 {
-    run_t *r = arg;
     char path[64];
-    app_path(path, sizeof(path), r->id, "mswapp");
-    r->code = "not_found";
+    app_path(path, sizeof(path), id, avatar ? "mswava" : "mswapp");
+    *code = "not_found";
     FILE *f = s_mounted ? fopen(path, "rb") : NULL;
     if (!f) {
-        snprintf(r->err, sizeof(r->err), "no app \"%s\"", r->id);
-        return;
+        snprintf(err, err_len, "no %s \"%s\"", avatar ? "avatar" : "app", id);
+        return false;
     }
     /* Only the header and the ELF are read: the icon and the source stay in
      * flash, and the package's CRC was checked when it was installed
@@ -973,17 +1008,18 @@ static void load(void *arg)
     struct stat st;
     size_t n = fstat(fileno(f), &st) == 0 ? (size_t)st.st_size : 0;
     msw_app_pkg_t h;
-    bool ok = n >= sizeof(h) && fread(&h, 1, sizeof(h), f) == sizeof(h) && !memcmp(h.magic, "MSWA", 4)
+    bool ok = n >= sizeof(h) && fread(&h, 1, sizeof(h), f) == sizeof(h)
+              && !memcmp(h.magic, avatar ? "MSWV" : "MSWA", 4)
               && h.elf_size && sizeof(h) + (size_t)h.icon_size + h.elf_size <= n;
     if (!ok || h.api > MSW_API_VERSION) {
         fclose(f);
-        r->code = ok ? "api_too_new" : "bad_format";
+        *code = ok ? "api_too_new" : "bad_format";
         if (ok) {
-            snprintf(r->err, sizeof(r->err), "built for API %u; this firmware has API %d", h.api, MSW_API_VERSION);
+            snprintf(err, err_len, "built for API %u; this firmware has API %d", h.api, MSW_API_VERSION);
         } else {
-            snprintf(r->err, sizeof(r->err), "not a mini-app package (.mswapp)");
+            snprintf(err, err_len, "not a mini-app package (.mswapp)");
         }
-        return;
+        return false;
     }
     uint8_t *buf = h.elf_size <= MSW_APP_MAX_BYTES ? heap_caps_malloc(h.elf_size, MALLOC_CAP_SPIRAM) : NULL;
     bool read = buf && fseek(f, (long)(sizeof(h) + h.icon_size), SEEK_SET) == 0
@@ -991,31 +1027,125 @@ static void load(void *arg)
     fclose(f);
     if (!read) {
         free(buf);
-        r->code = "out_of_memory";
-        snprintf(r->err, sizeof(r->err), "cannot read the app (%u bytes)", (unsigned)h.elf_size);
-        return;
+        *code = "out_of_memory";
+        snprintf(err, err_len, "cannot read the %s (%u bytes)", avatar ? "avatar" : "app", (unsigned)h.elf_size);
+        return false;
     }
-    if (!check_symbols(buf, h.elf_size, r->err, sizeof(r->err))) {
+    if (!check_symbols(buf, h.elf_size, avatar, err, err_len)) {
         free(buf);
-        r->code = "missing_symbol";
-        return;
+        *code = "missing_symbol";
+        return false;
     }
-    memcpy(r->name, h.name, MSW_APP_NAME_MAX);
-    r->name[MSW_APP_NAME_MAX] = 0;
+    memcpy(name, h.name, MSW_APP_NAME_MAX);
+    name[MSW_APP_NAME_MAX] = 0;
     int64_t t0 = esp_timer_get_time();
-    esp_elf_init(&r->elf);
-    int ret = esp_elf_relocate(&r->elf, buf, h.elf_size);
+    esp_elf_init(elf);
+    int ret = esp_elf_relocate(elf, buf, h.elf_size);
     free(buf);
     if (ret != 0) {
-        esp_elf_deinit(&r->elf);
-        r->code = "load_failed";
-        snprintf(r->err, sizeof(r->err), "ELF relocation failed (%d)", ret);
-        return;
+        esp_elf_deinit(elf);
+        *code = "load_failed";
+        snprintf(err, err_len, "ELF relocation failed (%d)", ret);
+        return false;
     }
-    r->loaded = true;
-    r->code = NULL;
-    msw_app_logf("%s: loaded in %d ms, PSRAM free %u", r->id, (int)((esp_timer_get_time() - t0) / 1000),
+    *code = NULL;
+    msw_app_logf("%s: loaded in %d ms, PSRAM free %u", id, (int)((esp_timer_get_time() - t0) / 1000),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    return true;
+}
+
+/* The app's ELF into r. On the service task. */
+static void load(void *arg)
+{
+    run_t *r = arg;
+    r->loaded = load_elf(r->id, false, &r->elf, r->name, &r->code, r->err, sizeof(r->err));
+}
+
+typedef struct {
+    const char *id;
+    esp_elf_t *elf;
+    char *name;
+    const char *code;
+    char *err;
+    size_t err_len;
+    bool ok;
+} avatar_load_t;
+
+static void load_avatar(void *arg)
+{
+    avatar_load_t *a = arg;
+    a->ok = load_elf(a->id, true, a->elf, a->name, &a->code, a->err, a->err_len);
+}
+
+bool msw_app_load_avatar(const char *id, esp_elf_t *elf, char *name, const char **code, char *err, size_t err_len)
+{
+    if (!valid_id(id)) {
+        *code = "not_found";
+        snprintf(err, err_len, "bad id");
+        return false;
+    }
+    avatar_load_t a = { .id = id, .elf = elf, .name = name, .err = err, .err_len = err_len };
+    msw_app_service(load_avatar, &a);
+    *code = a.code;
+    return a.ok;
+}
+
+void msw_app_unload_avatar(esp_elf_t *elf)
+{
+    esp_elf_deinit(elf);
+}
+
+void msw_app_init_arrays(esp_elf_t *elf)
+{
+    run_init_arrays(elf);
+}
+
+typedef struct {
+    msw_app_info_t *out;
+    int max, n;
+} avatar_scan_t;
+
+static void scan_avatars(void *arg)
+{
+    avatar_scan_t *q = arg;
+    DIR *d = s_mounted ? opendir(MSW_APP_DIR) : NULL;
+    struct dirent *e;
+    while (d && (e = readdir(d)) && q->n < q->max) {
+        const char *dot = strrchr(e->d_name, '.');
+        if (!dot || strcmp(dot, ".mswava")) {
+            continue;
+        }
+        char path[64];
+        snprintf(path, sizeof(path), MSW_APP_DIR "/%s", e->d_name);
+        FILE *f = fopen(path, "rb");
+        msw_app_pkg_t h;
+        if (f && fread(&h, 1, sizeof(h), f) == sizeof(h) && !memcmp(h.magic, "MSWV", 4)) {
+            msw_app_info_t *a = &q->out[q->n++];
+            memset(a, 0, sizeof(*a));
+            memcpy(a->id, h.id, sizeof(a->id));
+            a->id[sizeof(a->id) - 1] = '\0';
+            memcpy(a->name, h.name, sizeof(a->name));
+            a->name[sizeof(a->name) - 1] = '\0';
+            a->ver = h.ver;
+            a->api = h.api;
+            struct stat st;
+            a->bytes = stat(path, &st) == 0 ? (uint32_t)st.st_size : 0;
+        }
+        if (f) {
+            fclose(f);
+        }
+    }
+    if (d) {
+        closedir(d);
+    }
+    qsort(q->out, q->n, sizeof(*q->out), by_name);
+}
+
+int msw_app_list_avatars(msw_app_info_t *out, int max)
+{
+    avatar_scan_t q = { .out = out, .max = max };
+    msw_app_service(scan_avatars, &q);
+    return q.n;
 }
 
 bool msw_app_start(const char *id, const char **code, char *msg, size_t msg_len)
@@ -1157,6 +1287,40 @@ static bool console(const char *line)
             free(jpg);
             printf("@msw.app.shot done\n");
         }
+    } else if (!strncmp(cmd, "avatar ", 7)) {
+        /* avatar <id>|official */
+        bool ok = msw_avatar_use(cmd + 7, &code, msg, sizeof(msg));
+        printf("@msw.app.avatar %s\n", ok ? msw_avatar_current(NULL, 0, NULL) : msg);
+    } else if (!strncmp(cmd, "avatar_preview ", 15)) {
+        /* avatar_preview <id> <state> [frames]: app.avatar_preview's JPEG in base64 lines */
+        char id[MSW_APP_ID_MAX] = "", state[16] = "";
+        int frames = 0;
+        sscanf(cmd + 15, "%23s %15s %d", id, state, &frames);
+        msw_avatar_preview_t q = { .id = id, .state = state, .frames = frames };
+        if (!msw_avatar_preview(&q)) {
+            printf("@msw.app.shot error %s %s\n", q.code ? q.code : "failed", q.msg);
+        } else {
+            printf("@msw.app.shot %u bytes, %dx%d, %.1f ms a frame (%.1f at most), preview\n", (unsigned)q.n, q.w,
+                   q.h, q.avg_ms, q.max_ms);
+            for (size_t i = 0; i < q.n; i += 57) {
+                unsigned char line[80];
+                size_t len = 0;
+                mbedtls_base64_encode(line, sizeof(line), &len, q.jpg + i, q.n - i < 57 ? q.n - i : 57);
+                printf("%.*s\n", (int)len, line);
+            }
+            free(q.jpg);
+            printf("@msw.app.shot done\n");
+        }
+    } else if (!strcmp(cmd, "avatars")) {
+        static EXT_RAM_BSS_ATTR msw_app_info_t list[MSW_AVATAR_MAX];
+        int n = msw_avatar_list(list, MSW_AVATAR_MAX);
+        float ms;
+        for (int i = 0; i < n; i++) {
+            printf("@msw.app.avatar %s v%u %u bytes \"%s\"\n", list[i].id, list[i].ver, (unsigned)list[i].bytes,
+                   list[i].name);
+        }
+        const char *cur = msw_avatar_current(NULL, 0, &ms);
+        printf("@msw.app.avatars done %d, current %s, %.1f ms a frame\n", n, cur, ms);
     } else if (!strncmp(cmd, "src ", 4)) {
         const char *why;
         char *text = msw_app_source(cmd + 4, &why);
@@ -1239,5 +1403,6 @@ void msw_app_core_init(void)
     msw_app_service(rescan, NULL);
     msw_sound_init();
     msw_console_add(console);
+    msw_avatar_boot();
     ESP_LOGI(TAG, "mini apps: %d installed, API %d", s_napps, MSW_API_VERSION);
 }

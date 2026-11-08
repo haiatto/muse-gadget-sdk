@@ -136,6 +136,9 @@ static lv_obj_t *s_settings;
 /* museStopWatch: the mini-app launcher, left of the face (components/muse_diy_stopwatch/miniapp). */
 static lv_obj_t *s_launcher;
 void msw_launcher_build(lv_obj_t *tile) __attribute__((weak));
+/* museStopWatch: the avatar picker, below the face (idea 009). */
+static lv_obj_t *s_avatars;
+void msw_avatar_build(lv_obj_t *tile) __attribute__((weak));
 #define TILES 3
 static lv_obj_t *s_dots[TILES];
 
@@ -1164,7 +1167,9 @@ static void build_screen(void)
             lv_obj_set_scrollbar_mode(s_launcher, LV_SCROLLBAR_MODE_OFF);
             msw_launcher_build(s_launcher);
         }
-        s_face = lv_tileview_add_tile(s_tv, col++, 0, s_launcher ? LV_DIR_LEFT | LV_DIR_RIGHT : LV_DIR_RIGHT);
+        int face_col = col;
+        s_face = lv_tileview_add_tile(s_tv, col++, 0, (s_launcher ? LV_DIR_LEFT | LV_DIR_RIGHT : LV_DIR_RIGHT)
+                                                       | (msw_avatar_build ? LV_DIR_BOTTOM : 0));
         /* It never scrolls, but LVGL would size its scrollbars from all its
          * children every time it draws any part of it. */
         lv_obj_set_scrollbar_mode(s_face, LV_SCROLLBAR_MODE_OFF);
@@ -1173,6 +1178,11 @@ static void build_screen(void)
         lv_obj_set_style_bg_color(s_face, lv_color_black(), 0);
         lv_obj_set_style_bg_opa(s_face, LV_OPA_COVER, 0);
         s_settings = lv_tileview_add_tile(s_tv, col, 0, LV_DIR_LEFT);
+        if (msw_avatar_build) {   /* museStopWatch: swipe up from Muse for the avatar picker */
+            s_avatars = lv_tileview_add_tile(s_tv, face_col, 1, LV_DIR_TOP);
+            lv_obj_set_scrollbar_mode(s_avatars, LV_SCROLLBAR_MODE_OFF);
+            msw_avatar_build(s_avatars);
+        }
         lv_tileview_set_tile(s_tv, s_face, LV_ANIM_OFF);   /* start on Muse */
         lv_obj_add_event_cb(s_tv, tile_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
         face = s_face;
@@ -1489,7 +1499,7 @@ static void update_control_hints(muse_mode_t mode)
     /* Don't obscure settings rows/keyboards with floating physical icons.
      * museStopWatch: nor the app launcher (msw_launcher_build). */
     lv_obj_t *tile = s_tv ? lv_tileview_get_tile_active(s_tv) : NULL;
-    bool settings = tile && (tile == s_settings || tile == s_launcher);
+    bool settings = tile && (tile == s_settings || tile == s_launcher || tile == s_avatars);
     lv_obj_set_flag(s_ptt_hint, LV_OBJ_FLAG_HIDDEN, settings);
     lv_obj_set_flag(s_spk_hint, LV_OBJ_FLAG_HIDDEN, settings);
     lv_obj_set_flag(s_pwr_hint, LV_OBJ_FLAG_HIDDEN, settings);

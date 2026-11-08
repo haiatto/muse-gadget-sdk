@@ -271,6 +271,14 @@ bool msw_console(const char *line)
         xTaskCreateWithCaps(mem_task, "msw_mem", 4096, NULL, 1, NULL, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         return true;
     }
+    if (!strcmp(line, "msw.wake")) {
+        /* bench: the screen on, as a touch would (avatar tests, idea 009) */
+        extern void muse_state_set_asleep(bool asleep);
+        muse_state_set_asleep(false);
+        printf("@msw.wake ok\n");
+        fflush(stdout);
+        return true;
+    }
     if (!strncmp(line, "msw.caption ", 12)) {
         /* bench: a caption on the face and the app menu's bubble, to check
          * where long text goes (agent.status lines, idea 008) */

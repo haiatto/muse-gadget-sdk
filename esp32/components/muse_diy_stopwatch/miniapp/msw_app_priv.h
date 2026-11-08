@@ -75,6 +75,8 @@ char *msw_app_source(const char *id, const char **code);
 /* Calls fn(arg) on the service task, whose stack is internal RAM: the one
  * that may touch flash (FAT on the apps partition). Waits for it. */
 void msw_app_service(void (*fn)(void *arg), void *arg);
+/* The same without waiting (from code that must not block on flash). */
+void msw_app_service_async(void (*fn)(void *arg), void *arg);
 
 /* ---- api (msw_app_api.c) ---- */
 /* Before app_main; code_lo..code_hi is the app's loaded code on the
@@ -128,6 +130,44 @@ bool msw_overlay_active(void);
 
 /* ---- launcher ---- */
 void msw_launcher_refresh(void);
+
+/* ---- avatars (msw_avatar.c, idea 009) ---- */
+/* Avatars are packages too ("MSWV", sdk/build.py with "kind": "avatar"),
+ * stored as <id>.mswava beside the apps; the launcher does not list them. */
+#define MSW_AVATAR_MAX 16
+typedef struct esp_elf esp_elf_t;
+/* On the service task: reads, checks and relocates the avatar's ELF. */
+bool msw_app_load_avatar(const char *id, esp_elf_t *elf, char *name, const char **code, char *err, size_t err_len);
+void msw_app_unload_avatar(esp_elf_t *elf);
+void msw_app_init_arrays(esp_elf_t *elf);
+int msw_app_list_avatars(msw_app_info_t *out, int max);   /* by name */
+void msw_avatar_boot(void);                 /* once, after the store is mounted */
+void msw_avatar_installed(const char *id);  /* reloads it if it is on screen */
+void msw_avatar_removing(const char *id);   /* back to the official one if it is on screen */
+bool msw_avatar_use(const char *id, const char **code, char *msg, size_t msg_len);   /* "official" too */
+/* The avatar on screen ("official" for the official one), its name and its
+ * average draw time (-1: not measured yet). */
+const char *msw_avatar_current(char *name, size_t name_len, float *avg_ms);
+int msw_avatar_list(msw_app_info_t *out, int max);   /* installed avatars, by name */
+/* app.avatar_preview: the avatar in one state, frames over time in a grid,
+ * as a JPEG (malloc'd in jpg). On failure false with code and msg. */
+typedef struct {
+    const char *id, *state;     /* state: boot idle listening thinking working speaking happy error off */
+    int frames;                 /* 1..9 (0: 4) */
+    float seconds;              /* 0: the state's own length */
+    int quality;                /* 0: 60 */
+    int scale;                  /* 1..4 screen pixels a cell (0: 2) */
+    uint8_t *jpg;
+    size_t n;
+    int w, h, frames_out;
+    float times[9];             /* each frame's seconds into the state */
+    float avg_ms, max_ms;       /* render time */
+    const char *code;
+    char msg[160];
+    void *done;
+} msw_avatar_preview_t;
+bool msw_avatar_preview(msw_avatar_preview_t *q);
+const char *msw_avatar_state_names(void);
 
 #ifdef __cplusplus
 }

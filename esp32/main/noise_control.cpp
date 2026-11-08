@@ -1437,7 +1437,7 @@ static char *build_register_json(void) {
         /* museStopWatch: the version in the description tells Muse when to read it again. */
         char doc_desc[640];
         snprintf(doc_desc, sizeof(doc_desc),
-                 "Muse DIY StopWatch 総合ガイド（版 %s）。この時計のこと、ボタン、返事の字幕と読み上げ、"
+                 "Museストップウォッチ 総合ガイド（版 %s）。本体のこと、ボタン、返事の字幕と読み上げ、"
                  "各ツールの詳しい使い方と組み合わせ方、ユーザーへの案内、注意をまとめた日本語の"
                  "Markdown（content）を返します。この版をまだ読んでいなければ、会話の最初に1回呼んで"
                  "ください。同じ版を読んだことがあれば呼ばなくてよい。引数なし。",
@@ -1692,6 +1692,54 @@ static char *build_register_json(void) {
                     nullptr, shot_opt);
         cJSON_AddNumberToObject(
             cJSON_GetObjectItem(commands, "app.screenshot"), "timeout_ms", 20000);
+        cJSON *offset3 = cJSON_Duplicate(offset, true);
+        add_command(commands, "app.avatar_doc",
+                    "READ THIS FIRST when the user asks you to change your look on the watch "
+                    "(your avatar on the face screen): who to draw, the steps (build, check every "
+                    "state, install, show), the look and motion of each state, speed rules "
+                    "(in Japanese). Paged like app.doc.",
+                    nullptr, offset3);
+        add_command(commands, "app.avatar_list",
+                    "Avatars: your look on the watch's face screen, drawn by a small C "
+                    "program built with \"kind\": \"avatar\" (app.avatar_doc tells how). Lists the "
+                    "installed ones, the one on screen (current; \"official\" for your "
+                    "official look) and how long it takes to draw (draw_ms).",
+                    nullptr, nullptr);
+        cJSON *pre_req = cJSON_CreateObject();
+        cJSON_AddItemToObject(pre_req, "id", string_param("The avatar's id (installed, not \"official\")."));
+        cJSON_AddItemToObject(pre_req, "state", string_param(
+            "boot, idle, listening, thinking, working, speaking, happy, error or off."));
+        cJSON *pre_opt = cJSON_CreateObject();
+        cJSON *frames = cJSON_CreateObject();
+        cJSON_AddStringToObject(frames, "type", "integer");
+        cJSON_AddStringToObject(frames, "description", "Frames in the sheet, 1-9 (default 4).");
+        cJSON_AddItemToObject(pre_opt, "frames", frames);
+        cJSON *secs = cJSON_CreateObject();
+        cJSON_AddStringToObject(secs, "type", "number");
+        cJSON_AddStringToObject(secs, "description", "Seconds of the state the frames spread over (default per state, 1.4-2.4).");
+        cJSON_AddItemToObject(pre_opt, "seconds", secs);
+        cJSON *pscale = cJSON_CreateObject();
+        cJSON_AddStringToObject(pscale, "type", "integer");
+        cJSON_AddStringToObject(pscale, "description",
+                                "Screen pixels a grid cell, 1-4 (default 2: 4 frames are 256x256, about 12 KB). "
+                                "3 or 4 only to look closer at one frame (frames: 1).");
+        cJSON_AddItemToObject(pre_opt, "scale", pscale);
+        add_command(commands, "app.avatar_preview",
+                    "See an installed avatar in one state, as the face would show it: a JPEG "
+                    "(base64, like app.screenshot) of frames over time, left to right then down. "
+                    "It runs on the watch with a made-up voice level, whatever the screen shows, "
+                    "and measures draw_ms. Check every state after each install (app.avatar_doc).",
+                    pre_req, pre_opt);
+        cJSON_AddNumberToObject(
+            cJSON_GetObjectItem(commands, "app.avatar_preview"), "timeout_ms", 20000);
+        cJSON *ava_req = cJSON_CreateObject();
+        cJSON_AddItemToObject(ava_req, "id", string_param(
+            "The avatar's id (app.avatar_list), or \"official\" for the official look."));
+        add_command(commands, "app.avatar_use",
+                    "Put an installed avatar on the face screen (kept over restarts), or "
+                    "\"official\" to go back. The user can also choose by swiping up from the "
+                    "face. Install an avatar with app.install, remove it with app.remove.",
+                    ava_req, nullptr);
     }
 
 #if CONFIG_HOMEHUB_SENSECAP_SENSORS

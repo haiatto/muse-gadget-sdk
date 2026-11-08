@@ -9,6 +9,8 @@
  *   app.remove  delete an app by id         app.log    the app log
  *   app.source  the app's files kept in its package (sdk/build.py adds them)
  *   app.screenshot  the screen as a JPEG, base64 (like camera.capture)
+ *   app.avatar_doc, app.avatar_list, app.avatar_preview, app.avatar_use
+ *               the face screen's avatar (avatar_guide.md, msw_avatar.c)
  *   app.install is async: main/app.c fetches the file from the VM and hands
  *               it to msw_app_install_json.
  *
@@ -26,6 +28,8 @@
 extern const char guide_md_start[] asm("_binary_guide_md_start");
 extern const char guide_md_end[] asm("_binary_guide_md_end");
 extern const char msw_app_h_start[] asm("_binary_msw_app_h_start");
+extern const char avatar_guide_md_start[] asm("_binary_avatar_guide_md_start");
+extern const char avatar_guide_md_end[] asm("_binary_avatar_guide_md_end");
 extern const char msw_app_h_end[] asm("_binary_msw_app_h_end");
 
 #define PAGE (64 * 1024)   /* the guide is ~12 KB, the header ~11 KB */
@@ -206,6 +210,9 @@ cJSON *msw_app_command(const char *command, const cJSON *params)
     if (!strcmp(c, "doc")) {
         return page(guide_md_start, guide_md_end, params);
     }
+    if (!strcmp(c, "avatar_doc")) {
+        return page(avatar_guide_md_start, avatar_guide_md_end, params);
+    }
     if (!strcmp(c, "api")) {
         return page(msw_app_h_start, msw_app_h_end, params);
     }
@@ -267,6 +274,85 @@ cJSON *msw_app_command(const char *command, const cJSON *params)
     }
     if (!strcmp(c, "screenshot")) {
         return screenshot(params);
+    }
+    if (!strcmp(c, "avatar_list")) {
+        static EXT_RAM_BSS_ATTR msw_app_info_t list[MSW_AVATAR_MAX];
+        int n = msw_avatar_list(list, MSW_AVATAR_MAX);
+        float ms;
+        char name[MSW_APP_NAME_MAX + 1];
+        const char *cur = msw_avatar_current(name, sizeof(name), &ms);
+        cJSON *payload;
+        cJSON *r = ok_payload(&payload);
+        cJSON_AddStringToObject(payload, "current", cur);
+        if (ms >= 0) {
+            cJSON_AddNumberToObject(payload, "draw_ms", (int)(ms * 10 + 0.5f) / 10.0);
+        }
+        cJSON *arr = cJSON_AddArrayToObject(payload, "avatars");
+        for (int i = 0; i < n; i++) {
+            cJSON *a = cJSON_CreateObject();
+            cJSON_AddStringToObject(a, "id", list[i].id);
+            cJSON_AddStringToObject(a, "name", list[i].name);
+            cJSON_AddNumberToObject(a, "version", list[i].ver);
+            cJSON_AddNumberToObject(a, "bytes", list[i].bytes);
+            cJSON_AddItemToArray(arr, a);
+        }
+        cJSON_AddNumberToObject(payload, "max_avatars", MSW_AVATAR_MAX);
+        return r;
+    }
+    if (!strcmp(c, "avatar_preview")) {
+        msw_avatar_preview_t q = { .id = str(params, "id"), .state = str(params, "state") };
+        const cJSON *v = params ? cJSON_GetObjectItemCaseSensitive(params, "frames") : NULL;
+        q.frames = cJSON_IsNumber(v) ? v->valueint : 0;
+        v = params ? cJSON_GetObjectItemCaseSensitive(params, "seconds") : NULL;
+        q.seconds = cJSON_IsNumber(v) ? (float)v->valuedouble : 0;
+        v = params ? cJSON_GetObjectItemCaseSensitive(params, "quality") : NULL;
+        q.quality = cJSON_IsNumber(v) ? (v->valueint < 10 ? 10 : v->valueint > 95 ? 95 : v->valueint) : 0;
+        v = params ? cJSON_GetObjectItemCaseSensitive(params, "scale") : NULL;
+        q.scale = cJSON_IsNumber(v) ? v->valueint : 0;
+        if (!q.id || !q.state) {
+            return fail("missing_param", "id and state are required");
+        }
+        if (!msw_avatar_preview(&q)) {
+            return fail(q.code ? q.code : "failed", q.msg);
+        }
+        size_t cap = (q.n + 2) / 3 * 4 + 1, len = 0;
+        unsigned char *b64 = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
+        if (!b64 || mbedtls_base64_encode(b64, cap, &len, q.jpg, q.n) != 0) {
+            free(q.jpg);
+            free(b64);
+            return fail("out_of_memory", "out of memory");
+        }
+        free(q.jpg);
+        cJSON *payload;
+        cJSON *r = ok_payload(&payload);
+        cJSON_AddStringToObject(payload, "format", "jpeg-base64");
+        cJSON_AddStringToObject(payload, "data_base64", (const char *)b64);
+        free(b64);
+        cJSON_AddNumberToObject(payload, "width", q.w);
+        cJSON_AddNumberToObject(payload, "height", q.h);
+        cJSON_AddStringToObject(payload, "state", q.state);
+        cJSON *times = cJSON_AddArrayToObject(payload, "frame_seconds");
+        for (int i = 0; i < q.frames_out; i++) {
+            cJSON_AddItemToArray(times, cJSON_CreateNumber((int)(q.times[i] * 100 + 0.5f) / 100.0));
+        }
+        cJSON_AddNumberToObject(payload, "draw_ms", (int)(q.avg_ms * 10 + 0.5f) / 10.0);
+        cJSON_AddNumberToObject(payload, "draw_ms_max", (int)(q.max_ms * 10 + 0.5f) / 10.0);
+        return r;
+    }
+    if (!strcmp(c, "avatar_use")) {
+        const char *id = str(params, "id");
+        if (!id) {
+            return fail("missing_param", "id is required (\"official\" for the official avatar)");
+        }
+        const char *code = NULL;
+        char msg[200];
+        if (!msw_avatar_use(id, &code, msg, sizeof(msg))) {
+            return fail(code ? code : "load_failed", msg);
+        }
+        cJSON *payload;
+        cJSON *r = ok_payload(&payload);
+        cJSON_AddStringToObject(payload, "current", msw_avatar_current(NULL, 0, NULL));
+        return r;
     }
     if (!strcmp(c, "log")) {
         char *buf = heap_caps_malloc(8192, MALLOC_CAP_SPIRAM);

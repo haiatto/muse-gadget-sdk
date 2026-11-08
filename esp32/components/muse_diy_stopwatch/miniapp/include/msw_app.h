@@ -40,7 +40,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef MSW_HOST
+/* sdk/build.py running an avatar on the build machine: no lvgl there. */
+typedef struct _lv_obj_t lv_obj_t;
+typedef struct _lv_font_t lv_font_t;
+#else
 #include "lvgl.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -226,6 +232,54 @@ void msw_on_muse_reply(msw_reply_cb cb, void *user);
  * (as holding the talk button does outside apps), false ends it and sends
  * it; the reply comes to msw_on_muse_reply. Show the user what to press. */
 void msw_muse_talk(bool down);
+
+/* ---- avatars (app.json "kind": "avatar") --------------------------------- */
+
+/* An avatar is not an app: it draws Muse on the watch's face screen (and the
+ * small Muse of the app menu) in place of the official avatar, every frame,
+ * on the screen's task. It is built like an app, with "kind": "avatar" in
+ * app.json; its app_main only calls msw_avatar_define and returns 0. It
+ * must not call other msw_* functions, malloc, or wait: keep its data in
+ * static arrays. Draw on a 64 x 64 grid of colour numbers; the watch blows
+ * the grid up to the screen. render() runs about 25 times a second: keep it
+ * under 5 ms (app.avatar_list says how long it takes). If it crashes or is
+ * too slow, the watch goes back to the official avatar and says why in
+ * app.log. */
+
+#define MSW_AVATAR_W 64
+#define MSW_AVATAR_H 64
+#define MSW_AVATAR_COLORS 256
+
+/* Muse's state, as the face shows it. */
+#define MSW_MODE_BOOT 0
+#define MSW_MODE_IDLE 1
+#define MSW_MODE_LISTENING 2     /* the user is talking */
+#define MSW_MODE_THINKING 3      /* waiting for Muse's reply */
+#define MSW_MODE_SPEAKING 4      /* Muse's reply is playing */
+#define MSW_MODE_ERROR 5
+#define MSW_MODE_OFF 6           /* powering down */
+
+typedef struct {
+    int mode;        /* MSW_MODE_* */
+    float t;         /* seconds since boot */
+    float mode_t;    /* seconds in this mode */
+    float level;     /* 0..1: the voice's loudness (listening and speaking) */
+    float happy;     /* 0..1: just petted (the face was tapped) */
+    float working;   /* 0 or 1 in THINKING: Muse busy on work it was asked for */
+} msw_avatar_pose_t;
+
+typedef struct {
+    /* Fill grid[y * MSW_AVATAR_W + x] with colour numbers and set the
+     * colours used in palette (RGB565, MSW_RGB). Number 0 should be the
+     * background (black). The grid keeps the last frame's picture. */
+    void (*render)(const msw_avatar_pose_t *pose, uint8_t *grid, uint16_t *palette);
+    /* Optional (NULL: the official colours): the colour of the ring and the
+     * state's accents around the face for a mode, as 0xRRGGBB. */
+    uint32_t (*accent)(int mode);
+} msw_avatar_def_t;
+
+/* Call once from an avatar's app_main. def must stay (make it static). */
+void msw_avatar_define(const msw_avatar_def_t *def);
 
 #ifdef __cplusplus
 }

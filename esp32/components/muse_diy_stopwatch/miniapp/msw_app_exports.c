@@ -286,6 +286,7 @@ extern void msw_app_free(void);
 extern void msw_app_malloc(void);
 extern void msw_app_realloc(void);
 extern void msw_app_strdup(void);
+extern void msw_avatar_define(void);
 extern void msw_avatar_hide(void);
 extern void msw_avatar_show(void);
 extern void msw_bubble(void);
@@ -419,6 +420,7 @@ const struct esp_elfsym msw_app_symbols[] = {
     { "msw_bubble", (void *)&msw_bubble },
     { "msw_on_muse_reply", (void *)&msw_on_muse_reply },
     { "msw_muse_talk", (void *)&msw_muse_talk },
+    { "msw_avatar_define", (void *)&msw_avatar_define },
     { "malloc", (void *)&msw_app_malloc },
     { "calloc", (void *)&msw_app_calloc },
     { "realloc", (void *)&msw_app_realloc },
@@ -737,4 +739,4 @@ const struct esp_elfsym msw_app_symbols[] = {
     { "lv_timer_resume", (void *)&lv_timer_resume },
     ESP_ELFSYM_END
 };
-const int msw_app_symbol_count = 364;
+const int msw_app_symbol_count = 365;

@@ -100,6 +100,10 @@ static rgb_t s_scheme[5];      /* live, blended: f0..f3, acc */
 static bool s_scheme_init;
 static uint16_t s_pal[C_COUNT];
 static uint16_t s_pal_dim[C_COUNT];
+/* museStopWatch: the palettes the scalers use. An avatar app (idea 009)
+ * points them at its own 256 colours while it draws. */
+static const uint16_t *s_use_pal = s_pal;
+static const uint16_t *s_use_dim = s_pal_dim;
 
 /* museStopWatch: CPU-only buffers, so PSRAM (EXT_RAM_BSS_ATTR; internal RAM when
  * the build has no external .bss). Saves 8 KB of internal RAM. */
@@ -187,13 +191,23 @@ static inline uint16_t to565(rgb_t c)
     return (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
 }
 
+/* museStopWatch (idea 009): an avatar app can draw Muse instead. The
+ * miniapp component defines these; without it they stay NULL. */
+__attribute__((weak)) extern bool msw_avatar_hook_render(const muse_pose_t *p, uint8_t *grid,
+                                                          const uint16_t **pal, const uint16_t **dim);
+__attribute__((weak)) extern bool msw_avatar_hook_accent(muse_mode_t mode, uint32_t *rgb);
+
 uint32_t muse_pixel_accent(muse_mode_t mode)
 {
+    uint32_t rgb;
+    if (msw_avatar_hook_accent && msw_avatar_hook_accent(mode, &rgb)) return rgb;
     return SCHEMES[mode < MUSE_MODE_COUNT ? mode : MUSE_MODE_IDLE].acc;
 }
 
 uint32_t muse_pixel_working_accent(void)
 {
+    uint32_t rgb;
+    if (msw_avatar_hook_accent && msw_avatar_hook_accent(MUSE_MODE_THINKING, &rgb)) return rgb;
     return WORKING_SCHEME.acc;
 }
 
@@ -916,13 +930,13 @@ void muse_pixel_scale(uint16_t *dst, int stride_px, int x0, int x1, int y0, int 
         const uint8_t *row = &s_fb[(m & 0x7f) * W];
         if (m & 0x80) {
             for (int i = 0; i < n; i++) {
-                dst[i] = s_pal_dim[row[xmap[i] & 0x7f]];
+                dst[i] = s_use_dim[row[xmap[i] & 0x7f]];
             }
         } else {
             for (int i = 0; i < n; i++) {
                 uint8_t xm = xmap[i];
                 uint8_t c = row[xm & 0x7f];
-                dst[i] = xm & 0x80 ? s_pal_dim[c] : s_pal[c];
+                dst[i] = xm & 0x80 ? s_use_dim[c] : s_use_pal[c];
             }
         }
         prev = dst;
@@ -938,7 +952,7 @@ void muse_pixel_scale_px(int px, uint16_t *dst, int stride_px, int x0, int x1, i
     for (int y = y0; y <= y1; y++, dst += stride_px) {
         const uint8_t *row = &s_fb[(y * H / px) * W];
         for (int x = x0; x <= x1; x++) {
-            dst[x - x0] = s_pal[row[x * W / px]];
+            dst[x - x0] = s_use_pal[row[x * W / px]];
         }
     }
 }
@@ -947,6 +961,17 @@ void muse_pixel_render(const muse_pose_t *p)
 {
     static muse_speaking_t speech;
     static bool s_luts;
+    if (msw_avatar_hook_render) {
+        const uint16_t *pal, *dim;
+        if (msw_avatar_hook_render(p, s_fb, &pal, &dim)) {
+            s_use_pal = pal;
+            s_use_dim = dim;
+            return;
+        }
+        if (s_use_pal != s_pal) memset(s_fb, C_BG, sizeof(s_fb));   /* back to ours: no stray colours */
+        s_use_pal = s_pal;
+        s_use_dim = s_pal_dim;
+    }
     if (!s_luts) {
         init_luts();
         s_luts = true;
