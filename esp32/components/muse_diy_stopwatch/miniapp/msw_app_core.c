@@ -473,8 +473,36 @@ typedef struct {
     size_t n;
     const char *id;
     bool ok;
-    char err[48];
+    const char *code;   /* why not: no_space (default) or too_many_apps */
+    char err[96];
 } write_req_t;
+
+bool msw_app_space(uint32_t *total, uint32_t *free_bytes)
+{
+    uint64_t t = 0, f = 0;
+    if (!s_mounted || esp_vfs_fat_info(MSW_APP_DIR, &t, &f) != ESP_OK) {
+        return false;
+    }
+    *total = (uint32_t)t;
+    *free_bytes = (uint32_t)f;
+    return true;
+}
+
+/* Installed packages, up to MSW_APP_MAX_APPS. */
+static int count_packages(void)
+{
+    int n = 0;
+    DIR *d = opendir(MSW_APP_DIR);
+    struct dirent *e;
+    while (d && (e = readdir(d)) && n < MSW_APP_MAX_APPS) {
+        const char *dot = strrchr(e->d_name, '.');
+        n += dot && !strcmp(dot, ".mswapp");
+    }
+    if (d) {
+        closedir(d);
+    }
+    return n;
+}
 
 static void write_package(void *arg)
 {
@@ -482,6 +510,22 @@ static void write_package(void *arg)
     char tmp[64], path[64];
     app_path(tmp, sizeof(tmp), r->id, "tmp");
     app_path(path, sizeof(path), r->id, "mswapp");
+    /* Say why before writing, so Muse can make room: the launcher and
+     * app.list show MSW_APP_MAX_APPS apps at most, and an update is written
+     * beside the old package before it replaces it. */
+    struct stat st;
+    bool update = s_mounted && stat(path, &st) == 0;
+    if (s_mounted && !update && count_packages() >= MSW_APP_MAX_APPS) {
+        r->code = "too_many_apps";
+        snprintf(r->err, sizeof(r->err), "%d apps already: remove one first (app.remove)", MSW_APP_MAX_APPS);
+        return;
+    }
+    uint32_t total, free_bytes;
+    if (msw_app_space(&total, &free_bytes) && r->n + 16 * 1024 > free_bytes) {
+        snprintf(r->err, sizeof(r->err), "not enough space: needs %u KB, %u KB free of %u KB",
+                 (unsigned)(r->n / 1024 + 16), (unsigned)(free_bytes / 1024), (unsigned)(total / 1024));
+        return;
+    }
     FILE *f = s_mounted ? fopen(tmp, "wb") : NULL;
     if (!f) {
         snprintf(r->err, sizeof(r->err), s_mounted ? "cannot create the file" : "no apps volume");
@@ -520,10 +564,10 @@ bool msw_app_install(const uint8_t *data, size_t n, char *id_out, uint16_t *ver_
             vTaskDelay(pdMS_TO_TICKS(10));
         }
     }
-    write_req_t r = { .data = data, .n = n, .id = id };
+    write_req_t r = { .data = data, .n = n, .id = id, .code = "no_space" };
     msw_app_service(write_package, &r);
     if (!r.ok) {
-        *code = "no_space";
+        *code = r.code;
         snprintf(msg, msg_len, "%s", r.err);
         return false;
     }
@@ -714,8 +758,19 @@ static bool deliver_buttons(run_t *r)
             } else if (down) {
                 menu_open(r);
             }
-        } else if (!msw_menu_is_open()) {
-            msw_api_button(MSW_BUTTON_BLUE, down);
+        } else {
+            /* Blue: the app's, but Muse's while the menu is open. A release
+             * goes where its press went (Muse's own input task takes the
+             * release itself once its talk has started). */
+            static bool to_muse;
+            if (down) {
+                to_muse = msw_menu_is_open();
+            }
+            if (to_muse) {
+                msw_muse_talk(down);
+            } else if (!msw_menu_is_open()) {
+                msw_api_button(MSW_BUTTON_BLUE, down);
+            }
         }
     }
     int choice = msw_menu_is_open() ? msw_menu_choice() : MSW_MENU_NONE;
@@ -844,6 +899,7 @@ static void app_task(void *arg)
             break;
         }
         if (msw_menu_is_open()) {
+            msw_menu_poll();                  /* Muse's face and words in the menu */
             muse_board->display_unlock();
             last_ms = ms;                     /* paused: no ticks, no time */
             vTaskDelay(pdMS_TO_TICKS(20));
@@ -911,27 +967,44 @@ static void load(void *arg)
         snprintf(r->err, sizeof(r->err), "no app \"%s\"", r->id);
         return;
     }
+    /* Only the header and the ELF are read: the icon and the source stay in
+     * flash, and the package's CRC was checked when it was installed
+     * (2026-11-08: the source made a run read 5x the bytes it needed). */
     struct stat st;
     size_t n = fstat(fileno(f), &st) == 0 ? (size_t)st.st_size : 0;
-    uint8_t *buf = n && n <= MSW_APP_MAX_BYTES ? heap_caps_malloc(n, MALLOC_CAP_SPIRAM) : NULL;
-    bool read = buf && fread(buf, 1, n, f) == n;
+    msw_app_pkg_t h;
+    bool ok = n >= sizeof(h) && fread(&h, 1, sizeof(h), f) == sizeof(h) && !memcmp(h.magic, "MSWA", 4)
+              && h.elf_size && sizeof(h) + (size_t)h.icon_size + h.elf_size <= n;
+    if (!ok || h.api > MSW_API_VERSION) {
+        fclose(f);
+        r->code = ok ? "api_too_new" : "bad_format";
+        if (ok) {
+            snprintf(r->err, sizeof(r->err), "built for API %u; this firmware has API %d", h.api, MSW_API_VERSION);
+        } else {
+            snprintf(r->err, sizeof(r->err), "not a mini-app package (.mswapp)");
+        }
+        return;
+    }
+    uint8_t *buf = h.elf_size <= MSW_APP_MAX_BYTES ? heap_caps_malloc(h.elf_size, MALLOC_CAP_SPIRAM) : NULL;
+    bool read = buf && fseek(f, (long)(sizeof(h) + h.icon_size), SEEK_SET) == 0
+                && fread(buf, 1, h.elf_size, f) == h.elf_size;
     fclose(f);
     if (!read) {
         free(buf);
         r->code = "out_of_memory";
-        snprintf(r->err, sizeof(r->err), "cannot read the app (%u bytes)", (unsigned)n);
+        snprintf(r->err, sizeof(r->err), "cannot read the app (%u bytes)", (unsigned)h.elf_size);
         return;
     }
-    if (!check_package(buf, n, &r->code, r->err, sizeof(r->err))) {
+    if (!check_symbols(buf, h.elf_size, r->err, sizeof(r->err))) {
         free(buf);
+        r->code = "missing_symbol";
         return;
     }
-    const msw_app_pkg_t *h = (const msw_app_pkg_t *)buf;
-    memcpy(r->name, h->name, MSW_APP_NAME_MAX);
+    memcpy(r->name, h.name, MSW_APP_NAME_MAX);
     r->name[MSW_APP_NAME_MAX] = 0;
     int64_t t0 = esp_timer_get_time();
     esp_elf_init(&r->elf);
-    int ret = esp_elf_relocate(&r->elf, buf + sizeof(*h) + h->icon_size, h->elf_size);
+    int ret = esp_elf_relocate(&r->elf, buf, h.elf_size);
     free(buf);
     if (ret != 0) {
         esp_elf_deinit(&r->elf);
@@ -1007,7 +1080,10 @@ static void print_list(void)
     for (int i = 0; i < n; i++) {
         printf("@msw.app %s v%u %u bytes \"%s\"\n", list[i].id, list[i].ver, (unsigned)list[i].bytes, list[i].name);
     }
-    printf("@msw.app.list done %d apps, running %s\n", n, msw_app_running() ? msw_app_running() : "-");
+    uint32_t total = 0, free_bytes = 0;
+    msw_app_space(&total, &free_bytes);
+    printf("@msw.app.list done %d apps (max %d), %u KB free of %u KB, running %s\n", n, MSW_APP_MAX_APPS,
+           (unsigned)(free_bytes / 1024), (unsigned)(total / 1024), msw_app_running() ? msw_app_running() : "-");
 }
 
 static bool console(const char *line)
@@ -1039,6 +1115,11 @@ static bool console(const char *line)
     } else if (!strncmp(cmd, "run ", 4)) {
         bool ok = msw_app_start(cmd + 4, &code, msg, sizeof(msg));
         printf("@msw.app.run %s\n", ok ? "ok" : msg);
+    } else if (!strcmp(cmd, "menu")) {
+        /* As a press of the yellow button: opens or closes the app menu. */
+        bool ok = msw_app_button(true);
+        msw_app_button(false);
+        printf("@msw.app.menu %s\n", ok ? "ok" : "no app");
     } else if (!strcmp(cmd, "stop")) {
         msw_app_stop();
         printf("@msw.app.stop ok\n");
@@ -1052,17 +1133,21 @@ static bool console(const char *line)
             free(buf);
         }
         printf("@msw.app.log done\n");
-    } else if (!strcmp(cmd, "shot")) {
-        /* app.screenshot's JPEG in base64 lines (tools: decode to see it) */
-        extern uint8_t *msw_app_screenshot(int quality, size_t *n, const char **source, const char **why, int *ms);
+    } else if (!strcmp(cmd, "shot") || !strcmp(cmd, "shot full")) {
+        /* app.screenshot's JPEG in base64 lines (tools: decode to see it);
+         * half size as Muse's default, "shot full" for the whole screen */
+        extern uint8_t *msw_app_screenshot(int quality, int scale, size_t *n, int *w, int *h,
+                                           const char **source, const char **why, int *ms);
+        bool full = cmd[4] != 0;
         size_t n;
+        int w = 0, h = 0;
         const char *source = "", *why = NULL;
         int ms = 0;
-        uint8_t *jpg = msw_app_screenshot(70, &n, &source, &why, &ms);
+        uint8_t *jpg = msw_app_screenshot(full ? 70 : 40, full ? 1 : 2, &n, &w, &h, &source, &why, &ms);
         if (!jpg) {
             printf("@msw.app.shot error %s\n", why ? why : "failed");
         } else {
-            printf("@msw.app.shot %u bytes, %d ms, %s\n", (unsigned)n, ms, source);
+            printf("@msw.app.shot %u bytes, %dx%d, %d ms, %s\n", (unsigned)n, w, h, ms, source);
             for (size_t i = 0; i < n; i += 57) {
                 unsigned char line[80];
                 size_t len = 0;

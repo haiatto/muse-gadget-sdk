@@ -271,6 +271,26 @@ bool msw_console(const char *line)
         xTaskCreateWithCaps(mem_task, "msw_mem", 4096, NULL, 1, NULL, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         return true;
     }
+    if (!strncmp(line, "msw.caption ", 12)) {
+        /* bench: a caption on the face and the app menu's bubble, to check
+         * where long text goes (agent.status lines, idea 008) */
+        extern void muse_state_set_caption(const char *fmt, ...);
+        static char text[160];   /* "\n" in the line: a line break */
+        size_t o = 0;
+        for (const char *p = line + 12; *p && o < sizeof(text) - 1; p++) {
+            if (p[0] == '\\' && p[1] == 'n') {
+                text[o++] = '\n';
+                p++;
+            } else {
+                text[o++] = *p;
+            }
+        }
+        text[o] = '\0';
+        muse_state_set_caption("%s", text);
+        printf("@msw.caption ok\n");
+        fflush(stdout);
+        return true;
+    }
 #if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
     if (!strncmp(line, "msw.cpu", 7)) {
         int secs = atoi(line + 7);

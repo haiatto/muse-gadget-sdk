@@ -424,6 +424,12 @@ static bool hatch_reply(bool *delivered)
 {
     muse_state_set_mode(MUSE_MODE_THINKING);
     muse_state_set_caption("SENDING VOICE NOTE");   /* until there's a transcript or reply */
+    /* museStopWatch (idea 008): while waiting, the caption shows what Muse is
+     * doing (agent.status), until the reply starts. */
+    muse_state_set_activity("", "");
+    uint32_t activity_version = 0;
+    char activity[MUSE_ACTIVITY_MAX];
+    muse_state_activity(activity, sizeof(activity), &activity_version);
     static int16_t buf[MUSE_AUDIO_CHUNK];
     static const int16_t silence[MUSE_AUDIO_CHUNK];
     char text[96];
@@ -469,6 +475,10 @@ static bool hatch_reply(bool *delivered)
             default:
                 break;
             }
+        }
+        if (muse_state_activity(activity, sizeof(activity), &activity_version) && activity[0]
+            && !speaking && !replied && !done) {
+            muse_state_set_caption("%s", activity);
         }
         if (got_event(MUSE_PTT_DOWN)) {
             ESP_LOGI(TAG, "reply interrupted");

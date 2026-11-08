@@ -63,11 +63,24 @@ void muse_state_set_caption(const char *fmt, ...) __attribute__((format(printf, 
 /* Copies the caption if it changed since *version; returns true on change. */
 bool muse_state_caption(char *out, size_t out_len, uint32_t *version);
 
+/* museStopWatch (idea 008): what Muse is doing while a turn waits for its
+ * reply, from agent.status, as one line for any screen: the activity code in
+ * Japanese and, on a second line, Muse's own text ("調べ中…" / "Searching the
+ * web"). Set by the
+ * chat session; "" clears it (a new turn). The voice turn puts it in the
+ * caption, so the face and the app menu's bubble both show it. */
+#define MUSE_ACTIVITY_MAX 160
+void muse_state_set_activity(const char *code, const char *text);
+/* Copies the line if it changed since *version; returns true on change. */
+bool muse_state_activity(char *out, size_t out_len, uint32_t *version);
+
 /* A transient hint caption: cleared once MUSE_HINT_MS passes. Plain
  * captions (replies, status) never expire; a hint set replaces any
  * caption, and any later plain caption cancels the pending expiry. */
 #define MUSE_HINT_MS 5000
 void muse_state_set_hint(const char *text);
+/* museStopWatch: a hint that lasts ms (Muse's status between turns). */
+void muse_state_set_hint_ms(const char *text, int ms);
 /* Whether the caption is a hint that hasn't expired yet. */
 bool muse_state_hint_pending(void);
 

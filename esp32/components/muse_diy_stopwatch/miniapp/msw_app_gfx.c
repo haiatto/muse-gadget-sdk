@@ -93,22 +93,19 @@ msw_gfx_t *msw_fb(void)
     return s_fb;
 }
 
-/* The frame as the panel shows it (with Muse's avatar and bubble), RGB565
- * big endian, for app.screenshot. false: no frame (lvgl drawing). Display locked. */
-bool msw_gfx_copy_frame(uint16_t *out)
+/* Rows y0 .. y0 + n - 1 of the frame as the panel shows it (with Muse's
+ * avatar and bubble), RGB565 as lvgl keeps it, stride_px apart, for
+ * app.screenshot. false: no frame (lvgl drawing). Display locked. */
+bool msw_gfx_copy_rows(uint16_t *out, int stride_px, int y0, int n)
 {
     if (!s_fb) {
         return false;
     }
     bool overlay = msw_overlay_active();
-    for (int y = 0; y < MSW_SCREEN_H; y++) {
-        uint16_t *o = out + (size_t)y * MSW_SCREEN_W;
-        memcpy(o, s_fb->px + (size_t)y * s_fb->stride, MSW_SCREEN_W * 2);
+    for (int y = y0; y < y0 + n; y++, out += stride_px) {
+        memcpy(out, s_fb->px + (size_t)y * s_fb->stride, MSW_SCREEN_W * 2);
         if (overlay) {
-            msw_overlay_draw(o, y, 0, MSW_SCREEN_W);
-        }
-        for (int x = 0; x < MSW_SCREEN_W; x++) {
-            o[x] = (uint16_t)((o[x] >> 8) | (o[x] << 8));
+            msw_overlay_draw(out, y, 0, MSW_SCREEN_W);
         }
     }
     return true;

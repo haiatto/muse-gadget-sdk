@@ -115,6 +115,14 @@ static cJSON *list(void)
         cJSON_AddNullToObject(payload, "running");
     }
     cJSON_AddNumberToObject(payload, "api_version", MSW_API_VERSION);
+    /* Room for more: Muse backs up (app.source) and removes apps to make it. */
+    uint32_t total, free_bytes;
+    if (msw_app_space(&total, &free_bytes)) {
+        cJSON_AddNumberToObject(payload, "space_bytes", total);
+        cJSON_AddNumberToObject(payload, "free_bytes", free_bytes);
+    }
+    cJSON_AddNumberToObject(payload, "max_apps", MSW_APP_MAX_APPS);
+    cJSON_AddNumberToObject(payload, "max_app_bytes", MSW_APP_MAX_BYTES);
     return r;
 }
 
@@ -142,15 +150,23 @@ cJSON *msw_app_install_json(const uint8_t *data, size_t n, bool run)
     return r;
 }
 
-uint8_t *msw_app_screenshot(int quality, size_t *n, const char **source, const char **why, int *ms);
+uint8_t *msw_app_screenshot(int quality, int scale, size_t *n, int *w, int *h,
+                            const char **source, const char **why, int *ms);
 
+/* Half size (232 x 232, quality 40) unless "size":"full" (466 x 466,
+ * quality 70): the base64 reaches Muse as text, so a smaller picture is a
+ * shorter read (2026-11-08). */
 static cJSON *screenshot(const cJSON *params)
 {
     const cJSON *q = params ? cJSON_GetObjectItemCaseSensitive(params, "quality") : NULL;
+    const char *size = params ? cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(params, "size")) : NULL;
+    bool full = size && !strcmp(size, "full");
     size_t n;
+    int w = 0, h = 0;
     const char *source = "", *why = NULL;
     int ms = 0;
-    uint8_t *jpg = msw_app_screenshot(cJSON_IsNumber(q) ? q->valueint : 70, &n, &source, &why, &ms);
+    uint8_t *jpg = msw_app_screenshot(cJSON_IsNumber(q) ? q->valueint : full ? 70 : 40, full ? 1 : 2,
+                                      &n, &w, &h, &source, &why, &ms);
     if (!jpg) {
         return fail(why ? why : "failed", why && !strcmp(why, "out_of_memory") ? "out of memory" : "could not take the picture");
     }
@@ -167,8 +183,9 @@ static cJSON *screenshot(const cJSON *params)
     cJSON_AddStringToObject(payload, "format", "jpeg-base64");
     cJSON_AddStringToObject(payload, "data_base64", (const char *)b64);
     free(b64);
-    cJSON_AddNumberToObject(payload, "width", MSW_SCREEN_W);
-    cJSON_AddNumberToObject(payload, "height", MSW_SCREEN_H);
+    cJSON_AddNumberToObject(payload, "width", w);
+    cJSON_AddNumberToObject(payload, "height", h);
+    cJSON_AddStringToObject(payload, "size", full ? "full" : "half");
     cJSON_AddNumberToObject(payload, "bytes", (double)n);
     cJSON_AddStringToObject(payload, "source", source);
     const char *running = msw_app_running();

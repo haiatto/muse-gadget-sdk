@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -144,17 +145,22 @@ void muse_state_set_caption(const char *fmt, ...)
     va_end(ap);
 }
 
-static void set_hint(const char *fmt, ...)
+static void set_hint(int ms, const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    set_caption(esp_timer_get_time() + MUSE_HINT_MS * 1000LL, fmt, ap);
+    set_caption(esp_timer_get_time() + ms * 1000LL, fmt, ap);
     va_end(ap);
 }
 
 void muse_state_set_hint(const char *text)
 {
-    set_hint("%s", text);
+    set_hint(MUSE_HINT_MS, "%s", text);
+}
+
+void muse_state_set_hint_ms(const char *text, int ms)
+{
+    set_hint(ms, "%s", text);
 }
 
 bool muse_state_hint_pending(void)
@@ -163,6 +169,104 @@ bool muse_state_hint_pending(void)
     bool pending = s_hint_until_us && esp_timer_get_time() <= s_hint_until_us;
     portEXIT_CRITICAL(&s_lock);
     return pending;
+}
+
+/* museStopWatch (idea 008): agent.status as one line. The codes are the
+ * official ones (the Linux SDK's _ACTIVITY_CODES) and making_something; an unknown code is shown as
+ * Muse sent it, and text that only repeats the code is left out. */
+static EXT_RAM_BSS_ATTR char s_activity[MUSE_ACTIVITY_MAX];
+static uint32_t s_activity_version;
+
+static const char *activity_ja(const char *code)
+{
+    static const struct { const char *code, *ja; } names[] = {
+        { "working", "作業中" },      { "responding", "返事を書いている" },
+        { "thinking", "考え中" },     { "researching", "調べ中" },
+        { "planning", "計画中" },     { "processing", "処理中" },
+        { "generating", "生成中" },   { "executing", "実行中" },
+        { "listening", "聞いている" }, { "speaking", "話している" },
+        { "idle", "待機" },           { "online", "終わって待機" },
+        /* not in the SDK's list, seen 2026-11-08 */
+        { "making_something", "作成中" },
+    };
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        if (!strcmp(code, names[i].code)) {
+            return names[i].ja;
+        }
+    }
+    return code;
+}
+
+void muse_state_set_activity(const char *code, const char *text)
+{
+    char line[MUSE_ACTIVITY_MAX] = "";
+    code = code ? code : "";
+    text = text ? text : "";
+    /* "working" or "is working" (seen 2026-11-08) only repeats the code */
+    if (!strcmp(text, code) || (!strncmp(text, "is ", 3) && !strcmp(text + 3, code))) {
+        text = "";
+    }
+    const char *name = code[0] ? activity_ja(code) : "";
+    /* The text starts its own line: a long first line, centred, ran under the
+     * face's power icon (2026-11-08); the short name alone clears it. */
+    size_t cut = 0;   /* where the text starts; its own line breaks become spaces */
+    if (name[0] && text[0]) {
+        snprintf(line, sizeof(line), "%s…\n", name);
+        cut = strlen(line);
+        strlcat(line, text, sizeof(line));
+    } else if (name[0]) {
+        snprintf(line, sizeof(line), "%s…", name);
+    } else {
+        snprintf(line, sizeof(line), "%s", text);
+    }
+    /* Cut short: drop a UTF-8 character left half written, and line breaks. */
+    size_t n = strlen(line);
+    if (n == sizeof(line) - 1) {
+        size_t k = n;
+        while (k > 0 && ((unsigned char)line[k - 1] & 0xC0) == 0x80) {
+            k--;
+        }
+        if (k > 0 && (unsigned char)line[k - 1] >= 0xC0) {
+            line[k - 1] = '\0';
+        }
+    }
+    for (char *p = line + cut; *p; p++) {
+        if (*p == '\n' || *p == '\r' || *p == '\t') {
+            *p = ' ';
+        }
+    }
+    /* Drop text-direction marks (Muse sent "⁨Edit an⁩を実行しました",
+     * 2026-11-08): the fonts have no glyph for them. U+200E/F, U+202A-E, U+2066-9. */
+    char *o = line;
+    for (const char *p = line; *p;) {
+        const unsigned char *u = (const unsigned char *)p;
+        if (u[0] == 0xE2 && ((u[1] == 0x80 && (u[2] == 0x8E || u[2] == 0x8F || (u[2] >= 0xAA && u[2] <= 0xAE)))
+                             || (u[1] == 0x81 && u[2] >= 0xA6 && u[2] <= 0xA9))) {
+            p += 3;
+            continue;
+        }
+        *o++ = *p++;
+    }
+    *o = '\0';
+    portENTER_CRITICAL(&s_lock);
+    if (strcmp(line, s_activity) != 0) {
+        memcpy(s_activity, line, sizeof(s_activity));
+        s_activity_version++;
+    }
+    portEXIT_CRITICAL(&s_lock);
+}
+
+bool muse_state_activity(char *out, size_t out_len, uint32_t *version)
+{
+    bool changed = false;
+    portENTER_CRITICAL(&s_lock);
+    if (*version != s_activity_version) {
+        strlcpy(out, s_activity, out_len);
+        *version = s_activity_version;
+        changed = true;
+    }
+    portEXIT_CRITICAL(&s_lock);
+    return changed;
 }
 
 bool muse_state_caption(char *out, size_t out_len, uint32_t *version)

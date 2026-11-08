@@ -77,6 +77,8 @@ extern "C" {
 #include "muse_account_api.h"
 #include "muse_link.h"
 #include "muse_settings.h"
+#include "muse_state.h"
+#include "muse_text.h"
 #include "muse_wifi.h"
 }
 #include "muse_chat_priv.h"
@@ -1550,6 +1552,48 @@ static const char *msg_id(cJSON *payload, cJSON *event)
     return id && id[0] ? id : nullptr;
 }
 
+/*
+ * museStopWatch: Muse goes on working in this chat after a turn ends (an app
+ * it builds, a search). Its agent.status shows as a caption while the watch
+ * is idle, until Muse says it is done ("online" / "idle") or 2 minutes pass
+ * with no news. The subscription is this device's chat only.
+ */
+#define MSW_BG_ACTIVITY_MS (2 * 60 * 1000)
+
+static void msw_background_activity(cJSON *payload)
+{
+    const char *code = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "activity_code"));
+    if (!code) {
+        return;
+    }
+    const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "activity_text"));
+    ESP_LOGI(TAG, "activity between turns %s: %.80s", code, text ? text : "-");
+    bool done = !code[0] || !strcmp(code, "online") || !strcmp(code, "idle");
+    muse_state_set_activity(done ? "" : code, done ? "" : text);
+    static char shown[MUSE_CAPTION_MAX];   /* the caption set here, as the screen has it */
+    if (done) {
+        if (shown[0]) {
+            static char now[MUSE_CAPTION_MAX];
+            uint32_t v = UINT32_MAX;
+            muse_state_caption(now, sizeof(now), &v);
+            if (!strcmp(now, shown)) {
+                muse_state_set_caption("%s", "");   /* only ours: not a reply or an error since */
+            }
+            shown[0] = '\0';
+        }
+        return;
+    }
+    if (muse_state_mode(nullptr) != MUSE_MODE_IDLE) {
+        return;   /* listening, a turn, an error: their captions stay */
+    }
+    uint32_t v = 0;
+    muse_state_activity(shown, sizeof(shown), &v);
+    if (shown[0]) {
+        muse_state_set_hint_ms(shown, MSW_BG_ACTIVITY_MS);
+        muse_text_to_caption(shown, sizeof(shown));   /* as set_caption stores it */
+    }
+}
+
 static void on_event(cJSON *line)
 {
     if (strcmp(cJSON_GetStringValue(cJSON_GetObjectItem(line, "type")) ?: "", "event") != 0) {
@@ -1575,6 +1619,9 @@ static void on_event(cJSON *line)
                  msg_id(payload, line) ?: "-", pid ?: "-", sid ?: "-");
     }
     if (s_turn.phase != P_WAIT_REPLY) {
+        if (!strcmp(event, "agent.status")) {
+            msw_background_activity(payload);
+        }
         return;
     }
 
@@ -1589,6 +1636,12 @@ static void on_event(cJSON *line)
         }
         if (s_turn.text && s_turn.agent_busy != was) {
             muse_hatch_console("busy", nullptr, "\"on\":%s", s_turn.agent_busy ? "true" : "false");
+        }
+        if (code && !strcmp(event, "agent.status")) {
+            /* museStopWatch (idea 008): what Muse is doing, for the screens */
+            const char *activity = cJSON_GetStringValue(cJSON_GetObjectItem(payload, "activity_text"));
+            ESP_LOGI(TAG, "activity %s: %.80s", code, activity ? activity : "-");
+            muse_state_set_activity(code, activity);
         }
         s_turn.last_event_us = now_us();
         return;

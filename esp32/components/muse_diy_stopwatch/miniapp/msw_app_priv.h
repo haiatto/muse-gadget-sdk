@@ -54,6 +54,8 @@ typedef struct {
 /* ---- core ---- */
 void msw_app_core_init(void);                /* once, from the launcher build */
 int msw_app_list(msw_app_info_t *out, int max);   /* installed apps, by name */
+/* The apps volume's size and free bytes; false when it is not mounted. */
+bool msw_app_space(uint32_t *total, uint32_t *free_bytes);
 /* Checks and stores a package (data stays the caller's). On failure returns
  * false with *code and a message in msg. */
 bool msw_app_install(const uint8_t *data, size_t n, char *id_out, uint16_t *ver_out,
@@ -99,6 +101,7 @@ enum { MSW_MENU_NONE, MSW_MENU_GO_ON, MSW_MENU_QUIT };
 void msw_menu_open(const char *title);
 void msw_menu_close(void);
 bool msw_menu_is_open(void);
+void msw_menu_poll(void);                    /* while open: Muse's face and caption */
 int msw_menu_choice(void);                   /* the button tapped since the last call */
 int msw_api_fps(void);
 bool msw_api_exit_asked(void);

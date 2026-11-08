@@ -1637,11 +1637,13 @@ static char *build_register_json(void) {
         add_command(commands, "app.install",
                     "Install (or update: same id) a mini app from a .mswapp file on "
                     "your VM. Errors: bad_format, api_too_new, missing_symbol (the "
-                    "message names what the firmware lacks), no_space, busy.",
+                    "message names what the firmware lacks), no_space (the message says "
+                    "how much is free), too_many_apps, busy.",
                     inst, inst_opt);
 #endif
         add_command(commands, "app.list",
-                    "The installed mini apps, and which one runs now.", nullptr, nullptr);
+                    "The installed mini apps, which one runs now, and the room left "
+                    "(free_bytes of space_bytes, max_apps).", nullptr, nullptr);
         cJSON *run_req = cJSON_CreateObject();
         cJSON_AddItemToObject(run_req, "id", string_param("The app's id (app.list)."));
         add_command(commands, "app.run", "Start an installed mini app (ends the one running).",
@@ -1670,13 +1672,23 @@ static char *build_register_json(void) {
         cJSON *shot_opt = cJSON_CreateObject();
         cJSON *quality = cJSON_CreateObject();
         cJSON_AddStringToObject(quality, "type", "integer");
-        cJSON_AddStringToObject(quality, "description", "JPEG quality 10-95 (default 70).");
+        cJSON_AddStringToObject(quality, "description",
+                                "JPEG quality 10-95 (default 40 for half, 70 for full).");
         cJSON_AddItemToObject(shot_opt, "quality", quality);
+        cJSON *size = cJSON_CreateObject();
+        cJSON_AddStringToObject(size, "type", "string");
+        cJSON_AddStringToObject(size, "description",
+                                "half (default): 232x232, about 5 KB, enough for layout, colours and "
+                                "big text. full: 466x466, about 22 KB, for small text and fine detail.");
+        cJSON_AddItemToObject(shot_opt, "size", size);
         add_command(commands, "app.screenshot",
                     "What the watch screen shows now (the running mini app, or the watch's own "
-                    "screen), as a 466x466 JPEG in base64 (format jpeg-base64, data_base64). "
+                    "screen), as a JPEG in base64 (format jpeg-base64, data_base64). It comes "
+                    "back as text, so the default is a small half-size picture; ask for "
+                    "size full only when the half one is not enough. "
                     "The screen is round: only the circle is seen, the corners mean nothing. "
-                    "Use it to check a mini app's layout and drawing yourself; call it only when needed.",
+                    "Use it to check a mini app's layout and drawing yourself, or when the "
+                    "user asks you to look at the screen; then call it at once.",
                     nullptr, shot_opt);
         cJSON_AddNumberToObject(
             cJSON_GetObjectItem(commands, "app.screenshot"), "timeout_ms", 20000);

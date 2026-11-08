@@ -62,3 +62,7 @@ void muse_pixel_set_size(int px);
  * image never has to exist in RAM.
  */
 void muse_pixel_scale(uint16_t *dst, int stride_px, int x0, int x1, int y0, int y1);
+
+/* museStopWatch: muse_pixel_scale for a second Muse px x px in size, no grid
+ * lines (the mini-app menu). Does not change muse_pixel_set_size. */
+void muse_pixel_scale_px(int px, uint16_t *dst, int stride_px, int x0, int x1, int y0, int y1);

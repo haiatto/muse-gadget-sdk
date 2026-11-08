@@ -75,7 +75,7 @@ static void on_info_close(lv_event_t *e)
     close_info();
 }
 
-static void on_remove(lv_event_t *e)
+static void on_remove_yes(lv_event_t *e)
 {
     item_t *it = lv_event_get_user_data(e);
     char id[MSW_APP_ID_MAX];
@@ -86,21 +86,65 @@ static void on_remove(lv_event_t *e)
     msw_app_remove(id);
 }
 
+static lv_obj_t *panel(void);
+
+static lv_obj_t *round_button(lv_obj_t *parent, const char *text, uint32_t color, lv_event_cb_t cb, void *arg)
+{
+    lv_obj_t *b = lv_button_create(parent);
+    lv_obj_set_size(b, 120, 52);
+    lv_obj_set_style_radius(b, 26, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(color), 0);
+    lv_obj_t *l = lv_label_create(b);
+    lv_obj_set_style_text_font(l, jp(), 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(0x101010), 0);
+    lv_label_set_text(l, text);
+    lv_obj_center(l);
+    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, arg);
+    return b;
+}
+
+/* The ✕ asks first (user request 2026-11-08): removing can't be undone. */
+static void on_remove(lv_event_t *e)
+{
+    item_t *it = lv_event_get_user_data(e);
+    close_info();
+    s_info = panel();
+    lv_obj_t *l = lv_label_create(s_info);
+    lv_obj_set_style_text_font(l, jp(), 0);
+    lv_obj_set_style_text_color(l, lv_color_white(), 0);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(l, 280);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+    lv_label_set_text_fmt(l, "「%s」を\n本当に消しますか？\n\n元には戻せません", it->info.name);
+    lv_obj_align(l, LV_ALIGN_TOP_MID, 0, 22);
+    lv_obj_t *no = round_button(s_info, "やめる", 0xB0BEC5, on_info_close, NULL);
+    lv_obj_align(no, LV_ALIGN_BOTTOM_LEFT, 28, -20);
+    lv_obj_t *yes = round_button(s_info, "けす", 0xEF5350, on_remove_yes, it);
+    lv_obj_align(yes, LV_ALIGN_BOTTOM_RIGHT, -28, -20);
+}
+
+/* The dark rounded panel over the grid; a tap on it (not a button) closes it. */
+static lv_obj_t *panel(void)
+{
+    lv_obj_t *p = lv_obj_create(s_tile);
+    lv_obj_remove_style_all(p);
+    lv_obj_set_size(p, 320, 230);
+    lv_obj_center(p);
+    lv_obj_set_style_bg_color(p, lv_color_hex(0x202830), 0);
+    lv_obj_set_style_bg_opa(p, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(p, 24, 0);
+    lv_obj_set_style_border_width(p, 2, 0);
+    lv_obj_set_style_border_color(p, lv_color_hex(0x5A6878), 0);
+    lv_obj_remove_flag(p, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(p, on_info_close, LV_EVENT_CLICKED, NULL);
+    return p;
+}
+
 static void on_hold(lv_event_t *e)
 {
     item_t *it = lv_event_get_user_data(e);
     close_info();
-    s_info = lv_obj_create(s_tile);
-    lv_obj_remove_style_all(s_info);
-    lv_obj_set_size(s_info, 320, 230);
-    lv_obj_center(s_info);
-    lv_obj_set_style_bg_color(s_info, lv_color_hex(0x202830), 0);
-    lv_obj_set_style_bg_opa(s_info, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(s_info, 24, 0);
-    lv_obj_set_style_border_width(s_info, 2, 0);
-    lv_obj_set_style_border_color(s_info, lv_color_hex(0x5A6878), 0);
-    lv_obj_remove_flag(s_info, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(s_info, on_info_close, LV_EVENT_CLICKED, NULL);
+    s_info = panel();
 
     lv_obj_t *l = lv_label_create(s_info);
     lv_obj_set_style_text_font(l, jp(), 0);

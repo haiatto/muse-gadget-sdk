@@ -930,6 +930,19 @@ void muse_pixel_scale(uint16_t *dst, int stride_px, int x0, int x1, int y0, int 
     }
 }
 
+/* museStopWatch: muse_pixel_scale for a second, small Muse (the mini-app
+ * menu) at px x px, with no grid lines. It works out each cell itself and
+ * leaves muse_pixel_set_size (the face screen's Muse) alone. */
+void muse_pixel_scale_px(int px, uint16_t *dst, int stride_px, int x0, int x1, int y0, int y1)
+{
+    for (int y = y0; y <= y1; y++, dst += stride_px) {
+        const uint8_t *row = &s_fb[(y * H / px) * W];
+        for (int x = x0; x <= x1; x++) {
+            dst[x - x0] = s_pal[row[x * W / px]];
+        }
+    }
+}
+
 void muse_pixel_render(const muse_pose_t *p)
 {
     static muse_speaking_t speech;
