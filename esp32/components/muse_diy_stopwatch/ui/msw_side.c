@@ -248,6 +248,71 @@ int msw_side_add(const char *id)
     return i;
 }
 
+/* Copies name, cut to fit on a UTF-8 character boundary. */
+static void copy_name(char out[MSW_SIDE_NAME_MAX + 1], const char *name)
+{
+    size_t n = strnlen(name, MSW_SIDE_NAME_MAX + 1);
+    if (n > MSW_SIDE_NAME_MAX) {
+        n = MSW_SIDE_NAME_MAX;
+        while (n > 0 && ((unsigned char)name[n] & 0xC0) == 0x80) {
+            n--;   /* name[n] continues a character: cut before that character */
+        }
+    }
+    memcpy(out, name, n);
+    out[n] = '\0';
+}
+
+int msw_side_put(const char *id, const char *name, bool *added)
+{
+    char want[MSW_SIDE_ID_LEN + 1];
+    *added = false;
+    if (!id || !clean_id(id, want)) {
+        return MSW_SIDE_BAD_ID;
+    }
+    bool rename = name && name[0];
+    lock();
+    load_locked();
+    int i = -1;
+    for (int k = 0; k < s_n; k++) {
+        if (!strcmp(s_list[k].id, want)) {
+            i = k;
+            break;
+        }
+    }
+    if (i >= 0 && !rename) {
+        unlock();
+        return i;
+    }
+    if (i < 0 && s_n >= MSW_SIDE_MAX) {
+        unlock();
+        return MSW_SIDE_FULL;
+    }
+    msw_side_t was_entry = i >= 0 ? s_list[i] : (msw_side_t){0};
+    uint16_t was_seq = s_seq;
+    bool fresh = i < 0;
+    if (fresh) {
+        i = s_n++;
+        memcpy(s_list[i].id, want, sizeof(want));
+        s_seq++;
+        snprintf(s_list[i].name, sizeof(s_list[i].name), "Side %u", (unsigned)s_seq);
+    }
+    if (rename) {
+        copy_name(s_list[i].name, name);
+    }
+    if (save_locked()) {
+        *added = fresh;
+    } else if (fresh) {
+        s_n--;
+        s_seq = was_seq;
+        i = MSW_SIDE_NOT_SAVED;
+    } else {
+        s_list[i] = was_entry;
+        i = MSW_SIDE_NOT_SAVED;
+    }
+    unlock();
+    return i;
+}
+
 bool msw_side_delete(int i)
 {
     lock();

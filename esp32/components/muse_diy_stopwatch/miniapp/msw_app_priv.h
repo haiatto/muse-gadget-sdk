@@ -122,6 +122,8 @@ void msw_gfx_overlay_changed(void);
 
 /* ---- sound (msw_app_sound.c) ---- */
 void msw_sound_init(void);
+void msw_mic_app_end(void);
+void msw_port_app_end(void);                /* msw_app_port.c: PORT.A off with the app */                 /* msw_app_mic.c: the mic goes off with the app */
 void msw_sound_app(bool running);            /* keeps the speaker open while an app runs */
 
 /* ---- Muse overlay (msw_app_api.c) ---- */

@@ -2062,7 +2062,7 @@ static cJSON *on_ws_command(
         return async;
     }
 #endif
-    if (msw_doc_command && strcmp(command, "stopwatch.doc") == 0) {
+    if (msw_doc_command && (strcmp(command, "stopwatch.doc") == 0 || strncmp(command, "side.", 5) == 0)) {
         cJSON *r = msw_doc_command(command, params);
         if (r) return r;
     }

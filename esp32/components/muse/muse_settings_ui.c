@@ -43,6 +43,7 @@
 #include "muse_voice.h"
 #include "muse_wifi.h"
 #include "msw_text.h"   /* museStopWatch */
+#include "msw_time.h"   /* museStopWatch */
 #if CONFIG_MUSE_VIDEO
 #include "muse_video.h"
 #endif
@@ -1598,6 +1599,7 @@ static void build_power_page(lv_obj_t *tile)
 }
 
 #include "msw_settings_qr.inc"   /* museStopWatch */
+#include "msw_wake_ui.inc"        /* museStopWatch: Settings > Wake word */
 
 /* ---------- Home ---------- */
 
@@ -1632,6 +1634,9 @@ static void build_home(lv_obj_t *tile)
         row(list, LV_SYMBOL_VOLUME_MAX, "Sound", &s_home_sound, on_nav, (void *)&SOUND);
     }
     row(list, LV_SYMBOL_EYE_CLOSE, "Sleep", &s_home_sleep, on_nav, (void *)&SLEEP);
+    if (msw_wake_built_in()) {   /* museStopWatch */
+        row(list, LV_SYMBOL_AUDIO, "Wake word", &s_home_wake, on_nav, (void *)&MSW_WAKE);
+    }
     row(list, LV_SYMBOL_BATTERY_FULL, "Battery", &s_home_battery, on_nav, (void *)&BATTERY);
 #if CONFIG_MUSE_VIDEO
     if (muse_video_supported()) {
@@ -1669,6 +1674,7 @@ static void tick_home(void)
         set_text(s_home_sound, "Muted");
     }
     set_text(s_home_sleep, sleep_name(muse_settings_sleep_s()));
+    msw_tick_home_wake();   /* museStopWatch */
 
     muse_power_t p = muse_state_power();
     char buf[96];
@@ -1700,6 +1706,10 @@ void muse_settings_ui_build(lv_obj_t *tile)
     s_tile = tile;
     msw_web_autostart();   /* museStopWatch: the Web settings page is always there */
     msw_side_init();       /* museStopWatch: talk in the side chat chosen last */
+    msw_time_init();       /* museStopWatch: the date and time (RTC, SNTP) */
+    if (msw_wake_init) {
+        msw_wake_init();   /* museStopWatch: the wake word follows its setting */
+    }
     build_home(tile);
     show(s_home);
 }
@@ -1770,6 +1780,8 @@ void muse_settings_ui_tick(bool visible)
         tick_sleep();
     } else if (s_current == s_battery) {
         tick_battery();
+    } else if (s_wake && s_current == s_wake) {   /* museStopWatch */
+        msw_tick_wake();
     } else {
         msw_tick_qr();   /* museStopWatch */
     }

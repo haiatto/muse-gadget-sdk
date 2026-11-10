@@ -11,7 +11,7 @@ set(srcs)
 set(embed)
 set(embed_txt)
 if(CONFIG_MUSE_ENABLED AND NOT CONFIG_MUSE_UI_FREEINK)
-    set(srcs "msw_net.c" "msw_text.c" "msw_side.c" "msw_mem.c" "msw_doc.c")
+    set(srcs "msw_net.c" "msw_text.c" "msw_side.c" "msw_mem.c" "msw_doc.c" "msw_time.c")
     set(embed "msw_web.html")
     set(embed_txt "../docs/stopwatch_guide.md")
 endif()
@@ -23,5 +23,5 @@ idf_component_register(
     EMBED_TXTFILES ${embed_txt}
     WHOLE_ARCHIVE
     REQUIRES muse
-    PRIV_REQUIRES esp_http_server esp_wifi esp_netif nvs_flash esp_timer esp_pm
+    PRIV_REQUIRES esp_http_server esp_wifi esp_netif esp_event lwip nvs_flash esp_timer esp_pm
 )

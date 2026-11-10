@@ -57,7 +57,9 @@ if(CONFIG_MUSE_ENABLED)
     endif()
     list(APPEND srcs "muse_chat_text.c")
     if(CONFIG_MUSE_CJK_FONT_NOTO_JP)
-        list(APPEND srcs "fonts/muse_font_cjk_noto_jp_16.c")   # museStopWatch
+        # museStopWatch: the glyph bitmaps live in the msw_font partition
+        # (tools/muse/split_cjk_noto_jp_font.py makes _part.c and the .bin).
+        list(APPEND srcs "fonts/muse_font_cjk_noto_jp_16_part.c" "fonts/muse_font_part.c")
     elseif(CONFIG_MUSE_CJK_FONT_NOTO)
         list(APPEND srcs "fonts/muse_font_cjk_noto_16.c")   # captions' CJK fallback
     elseif(CONFIG_MUSE_CJK_FONT)
@@ -206,6 +208,8 @@ list(APPEND muse_priv_requires camera)
 # museStopWatch: AP, Web settings, QR and side-chat pages, Japanese labels
 # (components/muse_diy_stopwatch/ui; muse_settings_ui.c includes its pages).
 list(APPEND muse_priv_requires ui)
+# museStopWatch: the Japanese font's bitmaps in a partition (fonts/muse_font_part.c).
+list(APPEND muse_priv_requires esp_partition)
 # The P4 camera's JPEG encoder; Kconfig is not loaded yet when requirements expand.
 if(IDF_TARGET STREQUAL "esp32p4")
     list(APPEND muse_priv_requires esp_driver_jpeg)
@@ -241,4 +245,9 @@ elseif(CONFIG_MUSE_ENABLED)
     target_compile_definitions(${lvgl_lib} PUBLIC
         "LV_ASSERT_HANDLER_INCLUDE=<stdlib.h>"
         "LV_ASSERT_HANDLER=abort()\;")
+endif()
+
+# museStopWatch: flash the Japanese font's bitmaps with the app (idf.py flash).
+if(CONFIG_MUSE_CJK_FONT_NOTO_JP)
+    esptool_py_flash_to_partition(flash "msw_font" "${CMAKE_CURRENT_LIST_DIR}/fonts/muse_font_cjk_noto_jp_16.bin")
 endif()

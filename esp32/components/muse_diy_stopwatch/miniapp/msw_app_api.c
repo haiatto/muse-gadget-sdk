@@ -653,6 +653,20 @@ bool msw_imu(msw_imu_t *out)
     return true;
 }
 
+extern bool msw_board_imu_steps(uint32_t *out);
+
+int msw_steps(void)
+{
+    if (!s_imu_on) {
+        if (msw_board_imu_start() != ESP_OK) {
+            return -1;
+        }
+        s_imu_on = true;
+    }
+    uint32_t n;
+    return msw_board_imu_steps(&n) ? (int)n : -1;
+}
+
 bool msw_imu_probe(msw_imu_t *out)
 {
     int16_t raw[6];

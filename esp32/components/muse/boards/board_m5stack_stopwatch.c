@@ -49,6 +49,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -257,12 +258,31 @@ static esp_err_t reg_write(i2c_master_dev_handle_t dev, uint8_t reg, const uint8
     return err;
 }
 
+/* museStopWatch: mini apps switch the Grove 5 V (msw_board_port_power) while
+ * the input task updates the power LED in the same register: one at a time.
+ * The first call is at board init, before any other task runs. */
+static SemaphoreHandle_t s_pmic_lock;
+
 static esp_err_t pmic_update(uint8_t reg, uint8_t mask, uint8_t bits)
 {
+    if (!s_pmic_lock) {
+        s_pmic_lock = xSemaphoreCreateMutex();
+    }
+    if (s_pmic_lock) {
+        xSemaphoreTake(s_pmic_lock, portMAX_DELAY);
+    }
     uint8_t v;
-    ESP_RETURN_ON_ERROR(reg_read(s_pmic, reg, &v, 1), TAG, "pmic read %02x", reg);
-    uint8_t want = (v & ~mask) | (bits & mask);
-    return want == v ? ESP_OK : reg_write(s_pmic, reg, &want, 1);
+    esp_err_t err = reg_read(s_pmic, reg, &v, 1);
+    if (err == ESP_OK) {
+        uint8_t want = (v & ~mask) | (bits & mask);
+        err = want == v ? ESP_OK : reg_write(s_pmic, reg, &want, 1);
+    } else {
+        ESP_LOGE(TAG, "pmic read %02x", reg);
+    }
+    if (s_pmic_lock) {
+        xSemaphoreGive(s_pmic_lock);
+    }
+    return err;
 }
 
 /* M5Unified's M5PM1_Class::setLedEnLevel controls PWR_CFG bit4.
@@ -1196,6 +1216,8 @@ const muse_board_t *muse_board_get(void)
 #define IMU_REG_PWR_CONF 0x7C
 #define IMU_REG_PWR_CTRL 0x7D
 #define IMU_INIT_CHUNK 256
+#define IMU_REG_FEAT_PAGE 0x2F      /* which 16-byte page of features 0x30.. shows */
+#define IMU_REG_FEATURES 0x30
 #define IOE_PWM_FREQ 0x25
 
 extern const uint8_t msw_bmi270_config[];
@@ -1248,6 +1270,17 @@ esp_err_t msw_board_imu_start(void)
     reg_write(s_imu, IMU_REG_PWR_CTRL, (uint8_t[]){ 0x0E }, 1);   /* acc, gyr, temperature on */
     reg_write(s_imu, IMU_REG_PWR_CONF, (uint8_t[]){ 0x02 }, 1);
     vTaskDelay(pdMS_TO_TICKS(50));
+    /* The step counter: feature page 6, byte 3, bit 4 (Bosch's BMI270
+     * SensorAPI: set_step_counter, BMI270_STEP_CNT_4_STRT_ADDR 0x02 +
+     * BMI2_STEP_COUNT_FEAT_EN_OFFSET 1, BMI2_STEP_COUNT_FEAT_EN_MASK 0x10). */
+    if (reg_write(s_imu, IMU_REG_FEAT_PAGE, (uint8_t[]){ 6 }, 1) == ESP_OK &&
+        reg_read(s_imu, IMU_REG_FEATURES, buf + 1, 16) == ESP_OK) {
+        buf[0] = IMU_REG_FEATURES;
+        buf[1 + 3] |= 0x10;
+        if (i2c_master_transmit(s_imu, buf, 17, 100) != ESP_OK) {
+            ESP_LOGW(TAG, "BMI270: step counter not enabled");
+        }
+    }
     free(buf);
     ESP_LOGI(TAG, "BMI270: started");
     return ESP_OK;
@@ -1269,6 +1302,19 @@ bool msw_board_imu_read(int16_t out[6])
     for (int i = 0; i < 6; i++) {
         out[i] = (int16_t)(d[2 * i] | d[2 * i + 1] << 8);
     }
+    return true;
+}
+
+/* Steps since the IMU started (page 0, bytes 0-3: Bosch's
+ * BMI270_STEP_CNT_OUT_STRT_ADDR 0x00, little endian). */
+bool msw_board_imu_steps(uint32_t *out)
+{
+    uint8_t d[4];
+    if (!s_imu || reg_write(s_imu, IMU_REG_FEAT_PAGE, (uint8_t[]){ 0 }, 1) != ESP_OK ||
+        reg_read(s_imu, IMU_REG_FEATURES, d, sizeof(d)) != ESP_OK) {
+        return false;
+    }
+    *out = d[0] | d[1] << 8 | (uint32_t)d[2] << 16 | (uint32_t)d[3] << 24;
     return true;
 }
 
@@ -1298,4 +1344,69 @@ void msw_board_vibrate(int pct)
     uint8_t d[2] = { (uint8_t)(duty & 0xFF), (uint8_t)((duty >> 8) & 0x0F) | (pct ? 0x80 : 0) };
     reg_write(s_ioe, IOE_PWM1_DUTY, d, 2);
     xSemaphoreGive(s_ioe_lock);
+}
+
+/* ---- museStopWatch: the Grove port's 5 V and the RTC ----------------------
+ * PORT.A (HY2.0-4P): 5 V from the power chip's boost (PWR_CFG bit 3, off at
+ * boot), SDA G10, SCL G11 (M5Unified's pin table; the I2C is the mini apps'
+ * own bus, miniapp/msw_app_port.c). The RX8130CE RTC is at 0x32 (M5's C152
+ * page) on the always-on rail; it keeps UTC, as M5's factory firmware does
+ * (main/hal/hal_rtc.cpp, drivers/rx8130). */
+esp_err_t msw_board_port_power(bool on)
+{
+    if (!s_pmic) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return pmic_update(PMIC_PWR_CFG, PMIC_PWR_5V_OUT, on ? PMIC_PWR_5V_OUT : 0);
+}
+
+#define RTC_ADDR 0x32
+#define RTC_REG_SEC 0x10            /* sec, min, hour, wday, mday, month, year: BCD */
+#define RTC_REG_FLAG 0x1D           /* bit 1 VLF: the time was lost */
+#define RTC_REG_CTRL0 0x1E          /* bit 6 STOP */
+static i2c_master_dev_handle_t s_rtc;
+
+static int bcd(uint8_t v)
+{
+    return (v >> 4) * 10 + (v & 0x0F);
+}
+
+static bool rtc_dev(void)
+{
+    return s_rtc || (s_i2c && add_device(RTC_ADDR, 400000, &s_rtc) == ESP_OK);
+}
+
+/* UTC; false if it was never set or lost its time. */
+bool msw_board_rtc_get(struct tm *t)
+{
+    uint8_t d[7], flag;
+    if (!rtc_dev() || reg_read(s_rtc, RTC_REG_FLAG, &flag, 1) != ESP_OK || (flag & 0x02) ||
+        reg_read(s_rtc, RTC_REG_SEC, d, sizeof(d)) != ESP_OK) {
+        return false;
+    }
+    memset(t, 0, sizeof(*t));
+    t->tm_sec = bcd(d[0] & 0x7F);
+    t->tm_min = bcd(d[1] & 0x7F);
+    t->tm_hour = bcd(d[2] & 0x3F);
+    t->tm_mday = bcd(d[4] & 0x3F);
+    t->tm_mon = bcd(d[5] & 0x1F) - 1;
+    t->tm_year = bcd(d[6]) + 100;
+    return t->tm_mon >= 0 && t->tm_mon < 12 && t->tm_mday >= 1 && t->tm_mday <= 31 && t->tm_hour < 24 &&
+           t->tm_min < 60 && t->tm_sec < 60;
+}
+
+bool msw_board_rtc_set(const struct tm *t)
+{
+    uint8_t c;
+    if (!rtc_dev() || reg_read(s_rtc, RTC_REG_CTRL0, &c, 1) != ESP_OK) {
+        return false;
+    }
+    #define BCD(v) ((uint8_t)(((v) / 10) << 4 | (v) % 10))
+    uint8_t buf[8] = { RTC_REG_SEC, BCD(t->tm_sec), BCD(t->tm_min), BCD(t->tm_hour), BCD(t->tm_wday),
+                       BCD(t->tm_mday), BCD(t->tm_mon + 1), BCD(t->tm_year % 100) };
+    #undef BCD
+    bool ok = reg_write(s_rtc, RTC_REG_CTRL0, (uint8_t[]){ (uint8_t)(c | 0x40) }, 1) == ESP_OK &&
+              i2c_master_transmit(s_rtc, buf, sizeof(buf), 50) == ESP_OK;
+    reg_write(s_rtc, RTC_REG_CTRL0, (uint8_t[]){ (uint8_t)(c & ~0x40) }, 1);
+    return ok && reg_write(s_rtc, RTC_REG_FLAG, (uint8_t[]){ 0 }, 1) == ESP_OK;
 }

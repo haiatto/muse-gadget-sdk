@@ -1,0 +1,5 @@
+# museStopWatch: on-device wake words (microWakeWord models on TensorFlow Lite Micro).
+dependencies:
+  espressif/esp-tflite-micro: "~1.4.2"
+  # The audio frontend (frontend.h) microWakeWord models were trained with, as ESPHome uses it.
+  esphome/esp-micro-speech-features: "~1.2.3"

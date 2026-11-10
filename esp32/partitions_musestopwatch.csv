@@ -33,3 +33,7 @@ sano_model, data, 0x50,  0x830000, 0xC0000,
 sano_dict,  data, 0x51,  0x8F0000, 0x100000,
 # museStopWatch: mini apps (components/miniapp), a FAT volume mounted at /apps.
 apps,       data, fat,   0x9F0000, 0x400000,
+# museStopWatch: the Japanese caption font's glyph bitmaps (components/muse/fonts,
+# muse_font_part.c), mapped in place so they take no PSRAM. Written over USB
+# only; an OTA leaves it as it is.
+msw_font,   data, 0x52,  0xDF0000, 0x100000,

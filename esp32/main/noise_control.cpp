@@ -1443,6 +1443,23 @@ static char *build_register_json(void) {
                  "ください。同じ版を読んだことがあれば呼ばなくてよい。引数なし。",
                  msw_doc_version());
         add_command(commands, "stopwatch.doc", doc_desc, nullptr, nullptr);
+        /* museStopWatch: side chats (components/muse_diy_stopwatch/ui/msw_side.c). */
+        cJSON *side_req = cJSON_CreateObject();
+        cJSON_AddItemToObject(side_req, "id", string_param(
+            "会話そのものの ID（UUID、8-4-4-4-12、大文字小文字どちらでも）。エージェントのセッション ID ではない。"));
+        cJSON *side_opt = cJSON_CreateObject();
+        cJSON_AddItemToObject(side_opt, "name", string_param(
+            "本体に出す短い名前（23 バイトまで。日本語なら 7 文字）。"
+            "すでに一覧にあれば名前を変える。"));
+        add_command(commands, "side.add",
+                    "会話をサイドチャットの一覧（本体の 設定 > Muse > Side chat）に足す。"
+                    "すでにあれば足さない（added: false）。話す先は切り替えない。"
+                    "切り替えはユーザーが本体で行う。8 個まで。",
+                    side_req, side_opt);
+        add_command(commands, "side.list",
+                    "本体にあるサイドチャットの一覧（id、name）と、今話している先"
+                    "（current: その id。メインの会話なら \"main\"）。",
+                    nullptr, nullptr);
     }
     add_command(commands, "device.health",
                 "Report basic Link health, including battery level (percent), "

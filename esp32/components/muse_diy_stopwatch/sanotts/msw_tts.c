@@ -157,8 +157,18 @@ typedef struct {
     uint32_t *pull_us;
 } work_t;
 
+/* The PSRAM work area is taken at start-up and kept: about 120 KB in one
+ * piece, which later (an avatar loaded, a long chat) PSRAM may not have in
+ * one piece even with far more free ("no memory: arena", 2026-11-10). */
+static work_t s_keep;
+static atomic_bool s_keep_busy;   /* a bench and a say at once: the second takes its own */
+
 static bool work_alloc(work_t *w)
 {
+    if (!s_cfg.arena_int && s_keep.arena && !atomic_exchange(&s_keep_busy, true)) {
+        *w = s_keep;
+        return true;
+    }
     w->arena_n = arena_bytes();
     w->arena = heap_caps_aligned_alloc(16, w->arena_n, s_cfg.arena_int ? (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
                                                                         : (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
@@ -170,11 +180,20 @@ static bool work_alloc(work_t *w)
                (unsigned)heap_caps_get_largest_free_block(s_cfg.arena_int ? MALLOC_CAP_INTERNAL : MALLOC_CAP_SPIRAM));
         return false;
     }
+    if (!s_cfg.arena_int && !s_keep.arena) {
+        s_keep = *w;
+        atomic_store(&s_keep_busy, true);
+    }
     return true;
 }
 
 static void work_free(work_t *w)
 {
+    if (w->arena && w->arena == s_keep.arena) {
+        memset(w, 0, sizeof *w);   /* kept for the next time */
+        atomic_store(&s_keep_busy, false);
+        return;
+    }
     free(w->arena);
     free(w->ids);
     free(w->pull_us);
@@ -933,6 +952,9 @@ __attribute__((constructor)) static void msw_tts_register(void)
     msw_console_add(msw_tts_console);
     muse_reply_voice_set(&s_reply_voice);   /* Muse's replies are spoken with this voice */
     muse_voice_set_player(&s_player);       /* before the mini apps wrap it (msw_sound_init) */
+    work_t w = { 0 };
+    work_alloc(&w);   /* PSRAM is still in one piece: keep the work area (s_keep) */
+    work_free(&w);
 }
 
 bool msw_tts_console(const char *line)

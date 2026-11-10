@@ -113,6 +113,51 @@ static void walk_internal(void)
     free(w.b);
 }
 
+static int cmp_ptr(const void *a, const void *b)
+{
+    const blk_t *x = a, *y = b;
+    return (x->ptr > y->ptr) - (x->ptr < y->ptr);
+}
+
+/* ">msw.mem psram": the PSRAM heap's used blocks, to compare over time (what
+ * holds PSRAM after hours, 2026-11-10). Each block of 4 KB or more by
+ * address, so two reports can be diffed. */
+static void walk_psram(void)
+{
+    walk_t w = { 0 };
+    w.cap = 6000;
+    w.b = heap_caps_calloc(w.cap, sizeof(blk_t), MALLOC_CAP_SPIRAM);
+    if (!w.b) {
+        printf("msw_mem: psram walk: no memory\n");
+        return;
+    }
+    heap_caps_walk(MALLOC_CAP_SPIRAM, walk_cb, &w);
+    size_t bucket[7] = { 0 }, bcount[7] = { 0 };
+    static const uint32_t edge[6] = { 64, 256, 1024, 4096, 16384, 65536 };
+    for (size_t i = 0; i < w.n; i++) {
+        int k = 0;
+        while (k < 6 && w.b[i].size >= edge[k]) {
+            k++;
+        }
+        bucket[k] += w.b[i].size;
+        bcount[k]++;
+    }
+    printf("msw_mem: psram walk: used %u in %u blocks%s, free %u (largest %u)\n", (unsigned)w.used,
+           (unsigned)w.n, w.n == w.cap ? " (list full)" : "", (unsigned)w.free_sum, (unsigned)w.free_max);
+    printf("  by size: <64 %u/%u, <256 %u/%u, <1K %u/%u, <4K %u/%u, <16K %u/%u, <64K %u/%u, >=64K %u/%u (bytes/blocks)\n",
+           (unsigned)bucket[0], (unsigned)bcount[0], (unsigned)bucket[1], (unsigned)bcount[1], (unsigned)bucket[2],
+           (unsigned)bcount[2], (unsigned)bucket[3], (unsigned)bcount[3], (unsigned)bucket[4], (unsigned)bcount[4],
+           (unsigned)bucket[5], (unsigned)bcount[5], (unsigned)bucket[6], (unsigned)bcount[6]);
+    qsort(w.b, w.n, sizeof(blk_t), cmp_ptr);
+    for (size_t i = 0; i < w.n; i++) {
+        if (w.b[i].size >= 4096) {
+            const char *st = stack_of(&w.b[i]);
+            printf("  pblk %p %7u%s%s\n", w.b[i].ptr, (unsigned)w.b[i].size, st ? "  stack of " : "", st ? st : "");
+        }
+    }
+    free(w.b);
+}
+
 static void report(void)
 {
     multi_heap_info_t in;
@@ -236,6 +281,20 @@ static void cpu_task(void *arg)
 
 static void mem_task(void *arg)
 {
+    if (arg == (void *)2) {   /* ">msw.mem psram" */
+#if CONFIG_FREERTOS_USE_TRACE_FACILITY
+        UBaseType_t n = uxTaskGetNumberOfTasks() + 4;
+        s_st = heap_caps_malloc(n * sizeof(TaskStatus_t), MALLOC_CAP_SPIRAM);
+        s_nst = s_st ? uxTaskGetSystemState(s_st, n, NULL) : 0;
+#endif
+        walk_psram();
+        free(s_st);
+        s_st = NULL;
+        s_nst = 0;
+        printf("@msw.mem done\n");
+        fflush(stdout);
+        vTaskDeleteWithCaps(NULL);
+    }
     if (arg) {   /* at boot: 30 s and 120 s */
         vTaskDelay(pdMS_TO_TICKS(30000));
         report();
@@ -267,6 +326,10 @@ void msw_console_add(bool (*fn)(const char *line))
 
 bool msw_console(const char *line)
 {
+    if (!strcmp(line, "msw.mem psram")) {
+        xTaskCreateWithCaps(mem_task, "msw_mem", 4096, (void *)2, 1, NULL, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        return true;
+    }
     if (!strcmp(line, "msw.mem")) {
         xTaskCreateWithCaps(mem_task, "msw_mem", 4096, NULL, 1, NULL, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         return true;

@@ -190,6 +190,21 @@ int msw_pcm_write(const int16_t *mono, int n);
  * NULL when started, or why not: "speaker_off", "busy", "empty". */
 const char *msw_say(const char *text);
 
+/* ---- microphone ---------------------------------------------------------- */
+
+/* The mic, 16 kHz mono like msw_pcm_write. Off until the app turns it on; it
+ * goes off when the app ends. While on, the firmware keeps the last second. */
+void msw_mic_on(bool on);
+/* Takes up to max samples heard since the last call, oldest first; returns
+ * how many (0 if none). Read every tick: more than 1 s behind drops the
+ * oldest. */
+int msw_mic_read(int16_t *mono, int max);
+/* How loud the last 20 ms was, 0..100 (speech is about 30..70). -1 while the
+ * mic gives nothing: off, while the user talks to Muse (msw_muse_talk or the
+ * app menu), while Muse speaks its reply, or at rest. The mic also hears the
+ * app's own sound (msw_sound, msw_say). */
+int msw_mic_level(void);
+
 /* ---- vibration ----------------------------------------------------------- */
 
 void msw_vibrate(int ms, int strength);         /* strength 1..100; returns at once */
@@ -205,6 +220,42 @@ typedef struct {
  * the screen goes down makes ay negative: gravity in screen axes is
  * (-ax, -ay). Shaking shows as large changes. false if the sensor failed. */
 bool msw_imu(msw_imu_t *out);
+/* Steps the sensor counted since the app first used it (msw_imu or this);
+ * it counts while the app runs. -1 if the sensor failed. */
+int msw_steps(void);
+
+/* ---- date, time and battery -------------------------------------------- */
+
+typedef struct {
+    int year, month, day;          /* 2026, 1..12, 1..31 */
+    int hour, minute, second;      /* 0..23, 0..59, 0..59 */
+    int weekday;                   /* 0 Sunday .. 6 Saturday */
+} msw_time_t;
+/* Local time (Japan). false until the clock is set: the RTC keeps it over
+ * restarts, the network sets it once Wi-Fi is up. */
+bool msw_time(msw_time_t *out);
+
+typedef struct {
+    int percent;                   /* 0..100, -1 unknown */
+    int mv;                        /* battery voltage, 0 unknown */
+    bool charging;
+    bool usb;                      /* on USB power */
+} msw_battery_t;
+bool msw_battery(msw_battery_t *out);            /* read every few seconds by the firmware */
+
+/* ---- PORT.A (the Grove port on the case) -------------------------------- */
+
+/* HY2.0-4P: GND, 5V, G10 (SDA, yellow), G11 (SCL, white). Everything here
+ * goes off when the app ends. */
+bool msw_port_power(bool on);                    /* the 5V pin (uses the battery) */
+/* PORT.A as an I2C bus, 100 or 400 kHz; also turns the 5V pin on. */
+bool msw_i2c_begin(int khz);
+void msw_i2c_end(void);
+int msw_i2c_scan(uint8_t *found, int max);       /* 7-bit addresses that answer */
+bool msw_i2c_write(int addr, const void *data, int n);
+bool msw_i2c_read(int addr, void *data, int n);
+/* Writes then reads without a stop between: reading a sensor's register. */
+bool msw_i2c_write_read(int addr, const void *out, int n_out, void *in, int n_in);
 
 /* ---- storage ------------------------------------------------------------- */
 

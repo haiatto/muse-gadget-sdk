@@ -216,12 +216,27 @@ static void pre_put(void)
     s_pre_fill = s_pre_fill < PRE_CHUNKS ? s_pre_fill + 1 : PRE_CHUNKS;
 }
 
+/* museStopWatch: a mini app's mic (miniapp/msw_app_mic.c). It gets the idle
+ * reads and, while sound plays, reads made for it; nothing during a turn. */
+extern bool msw_mic_wanted(void) __attribute__((weak));
+extern void msw_mic_tap(const int16_t *mono, size_t n) __attribute__((weak));
+/* museStopWatch: wake words (muse_diy_stopwatch/wakeword); idle reads only. */
+extern void msw_wake_feed(const int16_t *mono, size_t n) __attribute__((weak));
+/* ... and the reads of a turn or a call: the VAD ends a turn a wake word began. */
+extern void msw_wake_turn_feed(const int16_t *mono, size_t n, bool quiet) __attribute__((weak));
+
 /* One 20 ms idle read: feeds the pre-roll ring and the settings mic meter. */
 static void idle_capture(void)
 {
     if (muse_audio_read(s_chunk, MUSE_AUDIO_CHUNK) != ESP_OK) {
         vTaskDelay(pdMS_TO_TICKS(20));
         return;
+    }
+    if (msw_mic_tap) {
+        msw_mic_tap(s_chunk, MUSE_AUDIO_CHUNK);
+    }
+    if (msw_wake_feed) {
+        msw_wake_feed(s_chunk, MUSE_AUDIO_CHUNK);
     }
     if (s_monitor) {
         float db = muse_audio_dbfs(s_chunk, MUSE_AUDIO_CHUNK);
@@ -359,6 +374,9 @@ static bool record(bool barge_in, size_t *held, char *why, size_t cap)
         }
         muse_state_set_level(muse_audio_level(s_chunk, MUSE_AUDIO_CHUNK));
         take(&st, s_chunk);
+        if (msw_wake_turn_feed) {
+            msw_wake_turn_feed(s_chunk, MUSE_AUDIO_CHUNK, false);
+        }
         /* Live transcript as the caption. A failure stops the streaming; the
          * kept note goes later, or without one the failure is the caption. */
         muse_hatch_ev_t ev;
@@ -1133,6 +1151,10 @@ static void run_call(bool ptt, size_t waking_chunks)
          * Clear before changing modes so speaker level cannot cross into it. */
         if (muse_voice_call_view() != view) muse_state_set_level(0);
         call_view(view);
+        /* museStopWatch: a held turn feeds the VAD; a waiting call, the wake word. */
+        if (captured && msw_wake_turn_feed) {
+            msw_wake_turn_feed(s_chunk, MUSE_AUDIO_CHUNK, view == MUSE_VOICE_VIEW_READY);
+        }
         muse_state_set_level(view == MUSE_VOICE_VIEW_SPEAKING ? (n ? muse_audio_level(out, n) : 0) :
                              view == MUSE_VOICE_VIEW_LISTENING ? mic_level : 0);
         if (ptt && status.overflow) muse_state_set_caption("MIC BUFFER FULL - RELEASE AND RETRY");
@@ -1199,6 +1221,9 @@ static void play_player(void)
         } else {   /* waiting for more: keep the speaker fed */
             muse_state_set_level(0);
             muse_audio_write(silence, MUSE_AUDIO_CHUNK);
+        }
+        if (msw_mic_wanted && msw_mic_wanted() && muse_audio_read(s_chunk, MUSE_AUDIO_CHUNK) == ESP_OK) {
+            msw_mic_tap(s_chunk, MUSE_AUDIO_CHUNK);   /* museStopWatch: the app's mic while it plays */
         }
     }
     muse_audio_write(silence, MUSE_AUDIO_CHUNK);

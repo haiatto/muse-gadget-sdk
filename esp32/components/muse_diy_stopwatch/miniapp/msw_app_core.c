@@ -974,6 +974,8 @@ static void app_task(void *arg)
     msw_api_end();
     muse_board->display_unlock();
     msw_sound_app(false);
+    msw_mic_app_end();
+    msw_port_app_end();
     msw_imu_release();
     msw_crash_app(NULL, 0, 0, 0);
     msw_app_service(unload, r);

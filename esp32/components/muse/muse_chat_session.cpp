@@ -1619,6 +1619,15 @@ static void on_event(cJSON *line)
                  msg_id(payload, line) ?: "-", pid ?: "-", sid ?: "-");
     }
     if (s_turn.phase != P_WAIT_REPLY) {
+        /* museStopWatch: the whole event, to tell Muse's own messages (a
+         * timer) from a chat in the Muse app (investigation, 2026-11-10). */
+        if (strcmp(event, "delta.text_append") != 0) {
+            char *raw = cJSON_PrintUnformatted(line);
+            if (raw) {
+                printf("@msw.ev %.600s%s\n", raw, strlen(raw) > 600 ? " ..." : "");
+                cJSON_free(raw);
+            }
+        }
         if (!strcmp(event, "agent.status")) {
             msw_background_activity(payload);
         }

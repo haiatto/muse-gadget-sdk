@@ -36,12 +36,18 @@ int msw_side_find(const char *id);
 bool msw_side_select(int i);
 #define MSW_SIDE_FULL (-1)
 #define MSW_SIDE_BAD_ID (-2)
+#define MSW_SIDE_NOT_SAVED (-3)   /* msw_side_put only: NVS refused */
 /* Adds a side chat and switches to it. id is one Muse already has (ask Muse
  * in that side chat for the side chat's own ID, not the agent's session ID,
  * which it may also give), any case; NULL or "" makes a new
  * one, whose conversation starts with the next message. An ID already listed
  * is just chosen. Returns its index, MSW_SIDE_FULL or MSW_SIDE_BAD_ID. */
 int msw_side_add(const char *id);
+/* For Muse's side.add: adds the side chat with this ID if it isn't listed,
+ * without switching to it. name (may be NULL or "") renames it, cut to
+ * MSW_SIDE_NAME_MAX bytes on a UTF-8 boundary. *added tells whether it was
+ * new. Returns its index, MSW_SIDE_FULL or MSW_SIDE_BAD_ID. */
+int msw_side_put(const char *id, const char *name, bool *added);
 /* Forgets the ID here (the conversation stays on Muse). Deleting the one in
  * use goes back to the main chat. */
 bool msw_side_delete(int i);

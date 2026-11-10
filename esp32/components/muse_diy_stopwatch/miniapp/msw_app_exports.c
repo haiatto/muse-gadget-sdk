@@ -289,6 +289,7 @@ extern void msw_app_strdup(void);
 extern void msw_avatar_define(void);
 extern void msw_avatar_hide(void);
 extern void msw_avatar_show(void);
+extern void msw_battery(void);
 extern void msw_bubble(void);
 extern void msw_exit(void);
 extern void msw_fb(void);
@@ -306,9 +307,18 @@ extern void msw_gfx_new(void);
 extern void msw_gfx_pixel(void);
 extern void msw_gfx_rect(void);
 extern void msw_gfx_text(void);
+extern void msw_i2c_begin(void);
+extern void msw_i2c_end(void);
+extern void msw_i2c_read(void);
+extern void msw_i2c_scan(void);
+extern void msw_i2c_write(void);
+extern void msw_i2c_write_read(void);
 extern void msw_imu(void);
 extern void msw_log(void);
 extern void msw_menu_own(void);
+extern void msw_mic_level(void);
+extern void msw_mic_on(void);
+extern void msw_mic_read(void);
 extern void msw_millis(void);
 extern void msw_muse_online(void);
 extern void msw_muse_talk(void);
@@ -318,6 +328,7 @@ extern void msw_on_muse_reply(void);
 extern void msw_on_pause(void);
 extern void msw_on_tick(void);
 extern void msw_pcm_write(void);
+extern void msw_port_power(void);
 extern void msw_random(void);
 extern void msw_say(void);
 extern void msw_screen(void);
@@ -330,9 +341,11 @@ extern void msw_sprite_draw(void);
 extern void msw_sprite_free(void);
 extern void msw_sprite_from_art(void);
 extern void msw_sprite_new(void);
+extern void msw_steps(void);
 extern void msw_store_get(void);
 extern void msw_store_put(void);
 extern void msw_text_width(void);
+extern void msw_time(void);
 extern void msw_touch(void);
 extern void msw_vibrate(void);
 extern void pow(void);
@@ -410,8 +423,21 @@ const struct esp_elfsym msw_app_symbols[] = {
     { "msw_sound_busy", (void *)&msw_sound_busy },
     { "msw_pcm_write", (void *)&msw_pcm_write },
     { "msw_say", (void *)&msw_say },
+    { "msw_mic_on", (void *)&msw_mic_on },
+    { "msw_mic_read", (void *)&msw_mic_read },
+    { "msw_mic_level", (void *)&msw_mic_level },
     { "msw_vibrate", (void *)&msw_vibrate },
     { "msw_imu", (void *)&msw_imu },
+    { "msw_steps", (void *)&msw_steps },
+    { "msw_time", (void *)&msw_time },
+    { "msw_battery", (void *)&msw_battery },
+    { "msw_port_power", (void *)&msw_port_power },
+    { "msw_i2c_begin", (void *)&msw_i2c_begin },
+    { "msw_i2c_end", (void *)&msw_i2c_end },
+    { "msw_i2c_scan", (void *)&msw_i2c_scan },
+    { "msw_i2c_write", (void *)&msw_i2c_write },
+    { "msw_i2c_read", (void *)&msw_i2c_read },
+    { "msw_i2c_write_read", (void *)&msw_i2c_write_read },
     { "msw_store_put", (void *)&msw_store_put },
     { "msw_store_get", (void *)&msw_store_get },
     { "msw_muse_online", (void *)&msw_muse_online },
@@ -739,4 +765,4 @@ const struct esp_elfsym msw_app_symbols[] = {
     { "lv_timer_resume", (void *)&lv_timer_resume },
     ESP_ELFSYM_END
 };
-const int msw_app_symbol_count = 365;
+const int msw_app_symbol_count = 378;
