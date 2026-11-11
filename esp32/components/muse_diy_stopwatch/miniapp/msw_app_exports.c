@@ -282,6 +282,7 @@ extern void memcpy(void);
 extern void memmove(void);
 extern void memset(void);
 extern void msw_app_calloc(void);
+extern void msw_app_data(void);
 extern void msw_app_free(void);
 extern void msw_app_malloc(void);
 extern void msw_app_realloc(void);
@@ -440,6 +441,7 @@ const struct esp_elfsym msw_app_symbols[] = {
     { "msw_i2c_write_read", (void *)&msw_i2c_write_read },
     { "msw_store_put", (void *)&msw_store_put },
     { "msw_store_get", (void *)&msw_store_get },
+    { "msw_app_data", (void *)&msw_app_data },
     { "msw_muse_online", (void *)&msw_muse_online },
     { "msw_avatar_show", (void *)&msw_avatar_show },
     { "msw_avatar_hide", (void *)&msw_avatar_hide },
@@ -765,4 +767,4 @@ const struct esp_elfsym msw_app_symbols[] = {
     { "lv_timer_resume", (void *)&lv_timer_resume },
     ESP_ELFSYM_END
 };
-const int msw_app_symbol_count = 378;
+const int msw_app_symbol_count = 379;

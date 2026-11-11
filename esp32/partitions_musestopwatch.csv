@@ -31,9 +31,14 @@ prod_bak,  data, 0x41,    0x821000, 0x1000,
 # Offsets on 64 KB boundaries (mmap pages). Subtypes 0x50/0x51 are our own.
 sano_model, data, 0x50,  0x830000, 0xC0000,
 sano_dict,  data, 0x51,  0x8F0000, 0x100000,
-# museStopWatch: mini apps (components/miniapp), a FAT volume mounted at /apps.
-apps,       data, fat,   0x9F0000, 0x400000,
+# museStopWatch: the mini apps' saved data (msw_store_put), a FAT volume mounted
+# at /apps. The packages themselves are in msw_pkgs (2026-11-11; before, all
+# was in a 4 MB FAT volume here).
+apps,       data, fat,   0x9F0000, 0x80000,
+# museStopWatch: mini app and avatar packages, each in one piece, mapped in
+# place (miniapp/msw_app_pkgs.c). Subtype 0x53 is our own.
+msw_pkgs,   data, 0x53,  0xA70000, 0x490000,
 # museStopWatch: the Japanese caption font's glyph bitmaps (components/muse/fonts,
 # muse_font_part.c), mapped in place so they take no PSRAM. Written over USB
 # only; an OTA leaves it as it is.
-msw_font,   data, 0x52,  0xDF0000, 0x100000,
+msw_font,   data, 0x52,  0xF00000, 0x100000,

@@ -1947,6 +1947,10 @@ extern void msw_tts_stop(void) __attribute__((weak));
 /* museStopWatch: mini apps (components/muse_diy_stopwatch/miniapp); NULL when not linked in. */
 extern cJSON *msw_app_command(const char *command, const cJSON *params) __attribute__((weak));
 extern cJSON *msw_app_install_json(const uint8_t *data, size_t n, bool run) __attribute__((weak));
+extern void *msw_app_install_json_begin(cJSON **err) __attribute__((weak));
+extern int msw_app_install_json_write(void *ctx, const uint8_t *p, size_t n) __attribute__((weak));
+extern cJSON *msw_app_install_json_end(void *ctx, const char *fetch_code, const char *fetch_msg,
+                                       bool run) __attribute__((weak));
 /* museStopWatch: the whole-device guide (components/muse_diy_stopwatch/ui/msw_doc.c). */
 extern cJSON *msw_doc_command(const char *command, const cJSON *params) __attribute__((weak));
 
@@ -1955,7 +1959,23 @@ typedef struct {
     noise_ctrl_session_generation_t session_generation;
     char request_id[64];
     bool run;
+    void *inst;     /* msw_app_install_json_begin's */
 } app_install_ctx_t;
+
+/* The package goes to flash part by part as it downloads (2026-11-11). */
+static int app_install_part(const uint8_t *data, size_t len, void *user) {
+    app_install_ctx_t *ctx = user;
+    return msw_app_install_json_write(ctx->inst, data, len);
+}
+
+static void app_install_streamed(size_t total, const char *code, const char *message,
+                                 void *user) {
+    (void)total;
+    app_install_ctx_t *ctx = user;
+    cJSON *result = msw_app_install_json_end(ctx->inst, code, message, ctx->run);
+    noise_ctrl_send_command_result(ctx->session_generation, ctx->request_id, result);
+    free(ctx);
+}
 
 static void app_install_done(uint8_t *data, size_t len, const char *code, const char *message,
                              void *user) {
@@ -2052,8 +2072,21 @@ static cJSON *on_ws_command(
         strncpy(ctx->request_id, request_id, sizeof(ctx->request_id) - 1);
         ctx->run = cJSON_IsTrue(cJSON_GetObjectItem(params, "run"));
         const char *code, *message;
-        if (!image_fetch_vm_file(path->valuestring, 1024 * 1024, app_install_done, ctx,
-                                 &code, &message)) {
+        if (msw_app_install_json_begin) {
+            cJSON *err = NULL;
+            ctx->inst = msw_app_install_json_begin(&err);
+            if (!ctx->inst) {
+                free(ctx);
+                return err;
+            }
+            if (!image_fetch_vm_stream(path->valuestring, 16 * 1024 * 1024, app_install_part,
+                                       app_install_streamed, ctx, &code, &message)) {
+                cJSON_Delete(msw_app_install_json_end(ctx->inst, "stopped", "", false));
+                free(ctx);
+                return command_error(code, message);
+            }
+        } else if (!image_fetch_vm_file(path->valuestring, 1024 * 1024, app_install_done, ctx,
+                                        &code, &message)) {
             free(ctx);
             return command_error(code, message);
         }

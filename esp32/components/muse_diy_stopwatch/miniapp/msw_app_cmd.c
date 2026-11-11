@@ -17,6 +17,7 @@
  * app.doc and app.api return the whole text (up to PAGE bytes; the reply is
  * sent in chunks). Past PAGE they page: pass "offset" from the last "next".
  */
+#include <stdio.h>
 #include <string.h>
 
 #include "cJSON.h"
@@ -126,19 +127,19 @@ static cJSON *list(void)
         cJSON_AddNumberToObject(payload, "free_bytes", free_bytes);
     }
     cJSON_AddNumberToObject(payload, "max_apps", MSW_APP_MAX_APPS);
-    cJSON_AddNumberToObject(payload, "max_app_bytes", MSW_APP_MAX_BYTES);
+    uint32_t t2, f2, largest = 0;
+    msw_pkgs_space(&t2, &f2, &largest);
+    /* A package can be as large as the free space; a gap too small is
+     * closed up when one is installed. */
+    cJSON_AddNumberToObject(payload, "max_app_bytes", (double)f2);
+    cJSON_AddNumberToObject(payload, "largest_gap_bytes", (double)largest);
     return r;
 }
 
-cJSON *msw_app_install_json(const uint8_t *data, size_t n, bool run)
+static cJSON *installed(const char *id, uint16_t ver, size_t n, bool run)
 {
-    char id[MSW_APP_ID_MAX] = "";
-    uint16_t ver = 0;
     const char *code = NULL;
     char msg[200];
-    if (!msw_app_install(data, n, id, &ver, &code, msg, sizeof(msg))) {
-        return fail(code ? code : "install_failed", msg);
-    }
     cJSON *payload;
     cJSON *r = ok_payload(&payload);
     cJSON_AddStringToObject(payload, "id", id);
@@ -152,6 +153,77 @@ cJSON *msw_app_install_json(const uint8_t *data, size_t n, bool run)
         }
     }
     return r;
+}
+
+/* app.install as the package arrives from the VM (main/app.c): begin, a
+ * write per part (0 go on, 1 send it again from the start, -1 stop), then
+ * end with the result. */
+typedef struct {
+    msw_app_inst_t *in;
+    size_t n;
+    const char *code;
+    char msg[200];
+} json_inst_t;
+
+void *msw_app_install_json_begin(cJSON **err)
+{
+    json_inst_t *j = calloc(1, sizeof(*j));
+    if (!j) {
+        *err = fail("out_of_memory", "failed to allocate");
+        return NULL;
+    }
+    j->in = msw_app_install_begin(0, &j->code, j->msg, sizeof(j->msg));
+    if (!j->in) {
+        *err = fail(j->code ? j->code : "install_failed", j->msg);
+        free(j);
+        return NULL;
+    }
+    return j;
+}
+
+int msw_app_install_json_write(void *ctx, const uint8_t *p, size_t n)
+{
+    json_inst_t *j = ctx;
+    bool restart;
+    if (msw_app_install_write(j->in, p, n, &restart)) {
+        j->n += n;
+        return 0;
+    }
+    if (restart) {
+        j->n = 0;
+        return 1;
+    }
+    return -1;
+}
+
+cJSON *msw_app_install_json_end(void *ctx, const char *fetch_code, const char *fetch_msg, bool run)
+{
+    json_inst_t *j = ctx;
+    char id[MSW_APP_ID_MAX] = "";
+    uint16_t ver = 0;
+    bool ok = msw_app_install_end(j->in, !fetch_code, id, &ver, &j->code, j->msg, sizeof(j->msg));
+    cJSON *r;
+    if (ok) {
+        r = installed(id, ver, j->n, run);
+    } else if (fetch_code && strcmp(fetch_code, "stopped")) {
+        r = fail(fetch_code, fetch_msg);    /* the download failed */
+    } else {
+        r = fail(j->code ? j->code : "install_failed", j->msg);
+    }
+    free(j);
+    return r;
+}
+
+cJSON *msw_app_install_json(const uint8_t *data, size_t n, bool run)
+{
+    char id[MSW_APP_ID_MAX] = "";
+    uint16_t ver = 0;
+    const char *code = NULL;
+    char msg[200];
+    if (!msw_app_install(data, n, id, &ver, &code, msg, sizeof(msg))) {
+        return fail(code ? code : "install_failed", msg);
+    }
+    return installed(id, ver, n, run);
 }
 
 uint8_t *msw_app_screenshot(int quality, int scale, size_t *n, int *w, int *h,
@@ -242,6 +314,14 @@ cJSON *msw_app_command(const char *command, const cJSON *params)
         cJSON *payload;
         cJSON *r = ok_payload(&payload);
         cJSON_AddStringToObject(payload, "stopped", running);
+        int stuck = msw_app_stuck_secs();
+        if (stuck) {
+            char note[200];
+            snprintf(note, sizeof(note),
+                     "its code has not returned for %d s: if it does not end within 5 s, the device restarts to end "
+                     "it, and app.log then says where it was (STUCK lines)", stuck);
+            cJSON_AddStringToObject(payload, "note", note);
+        }
         msw_app_stop();
         return r;
     }
@@ -265,8 +345,10 @@ cJSON *msw_app_command(const char *command, const cJSON *params)
         char *text = msw_app_source(id, &code);
         if (!text) {
             return fail(code, !strcmp(code, "no_source")
-                                  ? "this app was installed without its source (built before build.py kept it)"
-                                  : !strcmp(code, "not_found") ? "no such app" : "out of memory");
+                                  ? "this app was installed without its source (built with --no-source, or before build.py kept it)"
+                                  : !strcmp(code, "not_found")     ? "no such app"
+                                  : !strcmp(code, "broken_source") ? "the source in the package is broken"
+                                                                   : "out of memory");
         }
         cJSON *r = page(text, text + strlen(text), params);
         free(text);

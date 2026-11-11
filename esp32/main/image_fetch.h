@@ -81,6 +81,18 @@ typedef void (*image_fetch_file_cb)(uint8_t *data, size_t len, const char *code,
 bool image_fetch_vm_file(const char *path, size_t max, image_fetch_file_cb done,
                          void *user, const char **code, const char **message);
 
+// museStopWatch: the same, but each part goes to sink as it arrives, so no
+// whole copy is kept (app.install writes it to flash, 2026-11-11). sink
+// returns 0 to go on, 1 to read the file again from its start, -1 to stop.
+// done runs once at the end on the download task: code NULL when the whole
+// file went to sink.
+typedef int (*image_fetch_sink_cb)(const uint8_t *data, size_t len, void *user);
+typedef void (*image_fetch_stream_cb)(size_t total, const char *code, const char *message,
+                                      void *user);
+bool image_fetch_vm_stream(const char *path, size_t max, image_fetch_sink_cb sink,
+                           image_fetch_stream_cb done, void *user, const char **code,
+                           const char **message);
+
 #ifdef __cplusplus
 }
 #endif

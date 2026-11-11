@@ -998,7 +998,65 @@ typedef struct {
     fetch_t f;
     size_t max;
     image_fetch_file_cb file_done;
+    image_fetch_sink_cb sink;           // set: image_fetch_vm_stream
+    image_fetch_stream_cb stream_done;
 } file_fetch_t;
+
+// image_fetch_vm_stream's loop: parts to the sink, again from the start
+// when it asks. Returns the error code, or NULL.
+static const char *stream_parts(file_fetch_t *ff, size_t *total, const char **message) {
+    fetch_t *f = &ff->f;
+    const size_t cap = 16 * 1024;
+    uint8_t *buf = heap_caps_malloc(cap, VM_CAPS);
+    if (!buf) {
+        *message = "failed to allocate";
+        return "out_of_memory";
+    }
+    const char *code = NULL;
+    size_t len = 0;
+    for (int restarts = 0;;) {
+        int got = vm_read(f, buf, cap);
+        if (got < 0) {
+            *message = f->timed_out ? "download timed out" : "download failed";
+            code = "download_failed";
+            break;
+        }
+        if (got > 0) {
+            if (len + (size_t)got > ff->max) {
+                *message = "the file is larger than allowed";
+                code = "too_large";
+                break;
+            }
+            int r = ff->sink(buf, (size_t)got, f->user);
+            if (r < 0) {
+                code = "stopped";
+                break;
+            }
+            if (r > 0) {
+                if (++restarts > 2) {
+                    *message = "the file was asked for again too often";
+                    code = "download_failed";
+                    break;
+                }
+                // Again from the start: the same ranges from offset 0.
+                f->next_offset = 0;
+                f->body_len = f->body_pos = 0;
+                f->eof = false;
+                len = 0;
+                f->deadline_us = esp_timer_get_time() + FETCH_DEADLINE_MS * 1000LL;
+                continue;
+            }
+            len += (size_t)got;
+            // The deadline is for a stalled download: writing to flash
+            // (and making room there) takes its own time.
+            f->deadline_us = esp_timer_get_time() + FETCH_DEADLINE_MS * 1000LL;
+        }
+        if (got < (int)cap || (f->eof && f->body_pos == f->body_len)) break;
+    }
+    free(buf);
+    *total = len;
+    return code;
+}
 
 static void file_task(void *arg) {
     file_fetch_t *ff = arg;
@@ -1009,6 +1067,21 @@ static void file_task(void *arg) {
     uint8_t *data = NULL;
     size_t len = 0;
     const char *code = "download_failed", *message = NULL;
+    if (ff->sink) {
+        size_t total = 0;
+        const char *message = NULL;
+        code = vm_open(f, &result, msg, sizeof(msg)) ? stream_parts(ff, &total, &message)
+                                                     : "download_failed";
+        if (!message) message = result.message;
+        ESP_LOGI(TAG, "file %s: %s, %u bytes in parts", f->url, code ? code : "done", (unsigned)total);
+        free(f->body);
+        free(f->url);
+        atomic_store(&s_busy, false);
+        ff->stream_done(total, code, message ? message : "", f->user);
+        free(ff);
+        vTaskDelete(NULL);
+        return;
+    }
     if (vm_open(f, &result, msg, sizeof(msg))) {
         size_t cap = 64 * 1024;
         data = heap_caps_malloc(cap, VM_CAPS);
@@ -1057,8 +1130,24 @@ static void file_task(void *arg) {
     vTaskDelete(NULL);
 }
 
+static bool vm_file_start(const char *path, size_t max, image_fetch_file_cb done,
+                          image_fetch_sink_cb sink, image_fetch_stream_cb stream_done,
+                          void *user, const char **code, const char **message);
+
 bool image_fetch_vm_file(const char *path, size_t max, image_fetch_file_cb done,
                          void *user, const char **code, const char **message) {
+    return vm_file_start(path, max, done, NULL, NULL, user, code, message);
+}
+
+bool image_fetch_vm_stream(const char *path, size_t max, image_fetch_sink_cb sink,
+                           image_fetch_stream_cb done, void *user, const char **code,
+                           const char **message) {
+    return vm_file_start(path, max, NULL, sink, done, user, code, message);
+}
+
+static bool vm_file_start(const char *path, size_t max, image_fetch_file_cb done,
+                          image_fetch_sink_cb sink, image_fetch_stream_cb stream_done,
+                          void *user, const char **code, const char **message) {
     const char *name = path + strspn(path, "/");
     if (!*name) {
         *code = "invalid_params";
@@ -1086,6 +1175,8 @@ bool image_fetch_vm_file(const char *path, size_t max, image_fetch_file_cb done,
         f->user = user;
         ff->max = max;
         ff->file_done = done;
+        ff->sink = sink;
+        ff->stream_done = stream_done;
         ok = xTaskCreate(file_task, "vm_file", FETCH_STACK_BYTES, ff, 4, NULL) == pdPASS;
     }
     if (!ok) {

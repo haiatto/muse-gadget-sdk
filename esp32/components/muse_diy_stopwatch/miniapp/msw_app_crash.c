@@ -24,6 +24,7 @@
 #include "esp_private/panic_internal.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/freertos_debug.h"
 #include "freertos/task.h"
 #include "private/elf_symbol.h"
 #include "xtensa_context.h"
@@ -31,7 +32,7 @@
 
 #define CRASH_MAGIC 0x4D535743u   /* "MSWC" */
 #define CRASH_PCS 12
-#define CRASH_LOG 4
+#define CRASH_LOG 6   /* a stop that restarts adds 3 lines of its own */
 #define CRASH_LOG_LINE 120
 
 typedef struct {
@@ -39,8 +40,9 @@ typedef struct {
     /* set while an app runs */
     char app[MSW_APP_ID_MAX];
     uint32_t code_lo, code_hi, text_vaddr;
-    /* set by the panic */
+    /* set by the panic, or by msw_crash_stuck (stuck: seconds, then a restart) */
     uint8_t panicked, kind, core, n_pcs;
+    uint16_t stuck;
     uint32_t exccause, excvaddr, pc;
     char reason[96];
     char task[16];
@@ -96,6 +98,7 @@ static void record(const panic_info_t *info)
         c->magic = CRASH_MAGIC;
     }
     c->panicked = 1;
+    c->stuck = 0;
     c->kind = (uint8_t)(g_panic_abort ? PANIC_EXCEPTION_ABORT : info->exception);
     c->core = (uint8_t)info->core;
     c->pc = (uint32_t)info->addr;
@@ -113,6 +116,51 @@ static void record(const panic_info_t *info)
         c->pcs[c->n_pcs++] = esp_cpu_process_stack_pc(fr.pc);
         while (c->n_pcs < CRASH_PCS && fr.next_pc && esp_backtrace_get_next_frame(&fr)) {
             c->pcs[c->n_pcs++] = esp_cpu_process_stack_pc(fr.pc);
+        }
+    }
+    for (int i = 0; i < CRASH_LOG; i++) {
+        const char *line = NULL;
+        msw_app_log_peek(CRASH_LOG - 1 - i, &line);
+        copy_str(c->log[i], CRASH_LOG_LINE, line);
+    }
+    c->check = sum(c);
+}
+
+void msw_crash_stuck(void *task, const char *where, unsigned secs)
+{
+    crash_t *c = &s_crash;
+    if (c->magic != CRASH_MAGIC || c->check != sum(c)) {
+        memset(c, 0, sizeof(*c));
+        c->magic = CRASH_MAGIC;
+    }
+    c->panicked = 0;
+    c->stuck = (uint16_t)(secs ? secs : 1);
+    copy_str(c->reason, sizeof(c->reason), where);
+    c->n_pcs = 0;
+    TaskHandle_t t = task;
+    if (t) {
+        copy_str(c->task, sizeof(c->task), pcTaskGetName(t));
+        /* Off its core first, so its registers are saved on its stack. */
+        vTaskSuspend(t);
+        for (int i = 0; i < 50; i++) {
+            bool on = false;
+            for (int core = 0; core < configNUMBER_OF_CORES; core++) {
+                on |= xTaskGetCurrentTaskHandleForCore(core) == t;
+            }
+            if (!on) {
+                break;
+            }
+            vTaskDelay(1);
+        }
+        TaskSnapshot_t snap;
+        if (vTaskGetSnapshot(t, &snap) == pdTRUE && snap.pxTopOfStack) {
+            /* As esp_backtrace_print_all_tasks reads a task that isn't running. */
+            const XtExcFrame *f = (const XtExcFrame *)snap.pxTopOfStack;
+            esp_backtrace_frame_t fr = { .pc = f->pc, .sp = f->a1, .next_pc = f->a0, .exc_frame = NULL };
+            c->pcs[c->n_pcs++] = esp_cpu_process_stack_pc(fr.pc);
+            while (c->n_pcs < CRASH_PCS && fr.next_pc && esp_backtrace_get_next_frame(&fr)) {
+                c->pcs[c->n_pcs++] = esp_cpu_process_stack_pc(fr.pc);
+            }
         }
     }
     for (int i = 0; i < CRASH_LOG; i++) {
@@ -194,6 +242,33 @@ static const char *near_export(uint32_t pc, uint32_t *off)
     return best;
 }
 
+/* The backtrace and the log lines before it, as app.log lines starting with tag. */
+static void print_where(crash_t *c, const char *tag)
+{
+    msw_app_logf("%s: backtrace, newest first (app lines: addr2line -pfiaC -e build/%s.elf <ELF address>):",
+                 tag, c->app[0] ? c->app : "<id>");
+    for (int i = 0; i < c->n_pcs && i < CRASH_PCS; i++) {
+        uint32_t pc = c->pcs[i];
+        if (c->app[0] && pc >= c->code_lo && pc < c->code_hi) {
+            msw_app_logf("%s:  #%d app %s, ELF 0x%x", tag, i, c->app, (unsigned)(c->text_vaddr + pc - c->code_lo));
+        } else {
+            uint32_t off;
+            const char *name = near_export(pc, &off);
+            if (name) {
+                msw_app_logf("%s:  #%d firmware 0x%08x, in or after %s (+0x%x)", tag, i, (unsigned)pc, name, (unsigned)off);
+            } else {
+                msw_app_logf("%s:  #%d firmware 0x%08x", tag, i, (unsigned)pc);
+            }
+        }
+    }
+    for (int i = 0; i < CRASH_LOG; i++) {
+        c->log[i][CRASH_LOG_LINE - 1] = '\0';
+        if (c->log[i][0]) {
+            msw_app_logf("%s: log before it: %s", tag, c->log[i]);
+        }
+    }
+}
+
 void msw_crash_boot_report(void)
 {
     crash_t *c = &s_crash;
@@ -223,31 +298,19 @@ void msw_crash_boot_report(void)
             msw_app_logf("CRASH: the address is in %s's code, at ELF 0x%x", c->app,
                          (unsigned)(c->text_vaddr + c->excvaddr - c->code_lo));
         }
-        msw_app_logf("CRASH: backtrace, newest first (app lines: addr2line -pfiaC -e build/%s.elf <ELF address>):",
-                     c->app[0] ? c->app : "<id>");
-        for (int i = 0; i < c->n_pcs && i < CRASH_PCS; i++) {
-            uint32_t pc = c->pcs[i];
-            if (c->app[0] && pc >= c->code_lo && pc < c->code_hi) {
-                msw_app_logf("CRASH:  #%d app %s, ELF 0x%x", i, c->app, (unsigned)(c->text_vaddr + pc - c->code_lo));
-            } else {
-                uint32_t off;
-                const char *name = near_export(pc, &off);
-                if (name) {
-                    msw_app_logf("CRASH:  #%d firmware 0x%08x, in or after %s (+0x%x)", i, (unsigned)pc, name, (unsigned)off);
-                } else {
-                    msw_app_logf("CRASH:  #%d firmware 0x%08x", i, (unsigned)pc);
-                }
-            }
-        }
-        for (int i = 0; i < CRASH_LOG; i++) {
-            c->log[i][CRASH_LOG_LINE - 1] = '\0';
-            if (c->log[i][0]) {
-                msw_app_logf("CRASH: log before it: %s", c->log[i]);
-            }
-        }
+        print_where(c, "CRASH");
         char sha[17];
         esp_app_get_elf_sha256(sha, sizeof(sha));
         msw_app_logf("CRASH: firmware %s, ELF sha256 %s (end of the report)", esp_app_get_description()->version, sha);
+    } else if (valid && c->stuck && why == ESP_RST_SW && c->app[0]) {
+        c->app[sizeof(c->app) - 1] = c->reason[sizeof(c->reason) - 1] = '\0';
+        msw_app_logf("STUCK: %s did not return from %s for %u s after it was asked to end", c->app, c->reason,
+                     (unsigned)c->stuck);
+        msw_app_logf("STUCK: (app.stop or the yellow button held), so the device restarted to end it");
+        msw_app_logf("STUCK: hint: a loop that never ends, or waits for what does not come (an error handler that loops)");
+        msw_app_logf("STUCK: hint: return from app_main and the callbacks; on a fatal error, log it and call msw_exit()");
+        print_where(c, "STUCK");
+        msw_app_logf("STUCK: where it was is where the app's task stood when it was stopped (end of the report)");
     }
     msw_crash_app(NULL, 0, 0, 0);
 }

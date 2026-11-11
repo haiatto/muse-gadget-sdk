@@ -52,7 +52,7 @@ typedef struct _lv_font_t lv_font_t;
 extern "C" {
 #endif
 
-#define MSW_API_VERSION 1
+#define MSW_API_VERSION 2   /* 2: msw_app_data (2026-11-11) */
 #define MSW_SCREEN_W 466
 #define MSW_SCREEN_H 466
 
@@ -263,6 +263,13 @@ bool msw_i2c_write_read(int addr, const void *out, int n_out, void *in, int n_in
  * per key, keys of letters, digits and '_' up to 15 characters. */
 bool msw_store_put(const char *key, const void *data, size_t n);
 int msw_store_get(const char *key, void *data, size_t cap);   /* bytes read, -1 if none */
+
+/* A data file of the app: a file put in the app's folder data/, which
+ * sdk/build.py adds to the package (name as in the folder, "level1.bin").
+ * The bytes are read where they lie in flash: no copy in RAM, so large data
+ * (graphics, sound, levels) costs no memory. Read-only. NULL (and *size 0)
+ * when there is no such file. */
+const void *msw_app_data(const char *name, size_t *size);
 
 /* ---- Muse ---------------------------------------------------------------- */
 

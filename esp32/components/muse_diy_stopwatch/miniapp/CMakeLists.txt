@@ -8,7 +8,8 @@ set(embed)
 if(CONFIG_MUSE_BOARD_M5STACK_STOPWATCH)
     set(srcs "msw_app_core.c" "msw_app_api.c" "msw_app_gfx.c" "msw_app_sound.c"
              "msw_app_launcher.c" "msw_app_cmd.c" "msw_app_menu.c" "msw_app_exports.c"
-             "msw_app_crash.c" "msw_app_shot.c" "msw_avatar.c" "msw_app_mic.c" "msw_app_port.c")
+             "msw_app_crash.c" "msw_app_shot.c" "msw_avatar.c" "msw_app_mic.c" "msw_app_port.c"
+             "msw_app_pkgs.c")
     set(embed "guide.md" "avatar_guide.md" "include/msw_app.h")
 endif()
 
@@ -25,6 +26,7 @@ if(CONFIG_MUSE_BOARD_M5STACK_STOPWATCH)
     target_link_libraries(${COMPONENT_LIB} INTERFACE
         "-u msw_launcher_build" "-u msw_app_button" "-u msw_app_blue" "-u msw_app_command"
         "-u msw_app_install_json" "-u msw_app_muse_reply"
+        "-u msw_app_install_json_begin" "-u msw_app_install_json_write" "-u msw_app_install_json_end"
         # avatar/muse_pixel.c and muse_ui.c (idea 009: avatars)
         "-u msw_avatar_hook_render" "-u msw_avatar_hook_accent" "-u msw_avatar_build" "-u msw_mic_tap"
         # The crash report (msw_app_crash.c) sees each panic before IDF's handler.
