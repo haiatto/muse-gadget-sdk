@@ -30,6 +30,10 @@ Museストップウォッチのつくり: 466 x 466 の丸いタッチ画面（�
    **SDK の版**: 上の clone の行は、このファームに合う SDK を指す。開発中のファーム（`app.list` の
    `firmware` が 999.0.0）は main（`git pull` で最新にする）。リリースのファームは、その版のタグ（`--branch v<版>`）。
    ファームが替わったら（`app.list` の `firmware` が前と違う）、このガイドを読み直し、その clone の行の SDK に入れ直す。
+   **作る前に毎回**: `app.list` の `api_version` と、SDK の `sdk/include/msw_app.h` の `MSW_API_VERSION` を比べる。
+   ファームの方が大きければ、SDK が古い（ファームにある関数が SDK にない）。開発中のファームなら `git pull`、
+   リリースのファームなら上の clone の行のタグで入れ直してから組み立てる。
+   開発中のファームは書き込み直しても `firmware` が 999.0.0 のままなので、こちらで気づく。
 4. **入れる**: `app.install` の `path` に VM 上のファイルのパスを入れる
    （`run: true` で入れたあと起動）。同じ `id` なら上書き。ソースもMuseストップウォッチに残るので、
    VM のファイルがなくなっても `app.source`（id）で取り出して直せる。
