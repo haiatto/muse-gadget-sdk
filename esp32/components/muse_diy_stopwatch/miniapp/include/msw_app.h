@@ -267,8 +267,10 @@ bool msw_i2c_write_read(int addr, const void *out, int n_out, void *in, int n_in
  * output): 1 high, 0 low, -1 error. The pin becomes an input with the
  * internal pull-up (about 45 kOhm to 3.3 V), so a button to GND reads 0 while
  * pressed. It ends the I2C bus; msw_i2c_begin takes the pins back. There is
- * no output: the pins never drive anything. The 5V pin stays as it is:
- * msw_port_power(true) for a unit that needs power. */
+ * no output: the pins never drive anything. The 5V pin stays as it is: call
+ * msw_port_power(true) first, as most units run on it and without it a line
+ * can stay low. Which level means what depends on the unit: log the values
+ * and check them with app.log before relying on them. */
 #define MSW_PIN_YELLOW 0   /* G10 (SDA) */
 #define MSW_PIN_WHITE 1    /* G11 (SCL) */
 int msw_pin_read(int pin);
