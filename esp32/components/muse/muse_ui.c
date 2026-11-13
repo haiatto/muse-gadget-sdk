@@ -1172,7 +1172,10 @@ static void build_screen(void)
         lv_obj_set_scrollbar_mode(s_tv, LV_SCROLLBAR_MODE_OFF);
         int col = 0;
         if (msw_launcher_build) {   /* museStopWatch: swipe right from Muse for the launcher */
-            s_launcher = lv_tileview_add_tile(s_tv, col++, 0, LV_DIR_RIGHT);
+            /* LV_DIR_HOR, not only RIGHT: a swipe past the end (to the right
+             * here) then bounces (elastic) instead of finding no scroll and
+             * becoming a tap or long press on what is under the finger. */
+            s_launcher = lv_tileview_add_tile(s_tv, col++, 0, LV_DIR_HOR);
             lv_obj_set_scrollbar_mode(s_launcher, LV_SCROLLBAR_MODE_OFF);
             msw_launcher_build(s_launcher);
         }
@@ -1186,7 +1189,8 @@ static void build_screen(void)
          * shows as a different-coloured square around the character. */
         lv_obj_set_style_bg_color(s_face, lv_color_black(), 0);
         lv_obj_set_style_bg_opa(s_face, LV_OPA_COVER, 0);
-        s_settings = lv_tileview_add_tile(s_tv, col, 0, LV_DIR_LEFT);
+        /* museStopWatch: LV_DIR_HOR as the launcher, so a swipe past the end is no tap. */
+        s_settings = lv_tileview_add_tile(s_tv, col, 0, s_launcher ? LV_DIR_HOR : LV_DIR_LEFT);
         if (msw_avatar_build) {   /* museStopWatch: swipe up from Muse for the avatar picker */
             s_avatars = lv_tileview_add_tile(s_tv, face_col, 1, LV_DIR_TOP);
             lv_obj_set_scrollbar_mode(s_avatars, LV_SCROLLBAR_MODE_OFF);

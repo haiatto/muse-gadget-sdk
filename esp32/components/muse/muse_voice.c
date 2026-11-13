@@ -535,8 +535,16 @@ static bool hatch_reply(bool *delivered, bool incoming)
             muse_state_set_level(0);
             return true;
         }
-        size_t n = muse_hatch_turn_read(buf, MUSE_AUDIO_CHUNK, speaking || done ? 0 : 20);
-        if (n) {
+        /* museStopWatch: until the reply speaks, the other sound (a mini app,
+         * sound.play, voice.say) plays on as when idle; the speaker paces the
+         * loop then. The reply's speech goes first once it starts. */
+        const muse_voice_player_t *p = s_player;
+        bool other = !speaking && !done && p && p->ready();
+        size_t n = muse_hatch_turn_read(buf, MUSE_AUDIO_CHUNK, speaking || done || other ? 0 : 20);
+        if (!n && other) {
+            size_t m = p->read(buf, MUSE_AUDIO_CHUNK);
+            muse_audio_write(m ? buf : silence, m ? m : MUSE_AUDIO_CHUNK);
+        } else if (n) {
             if (!speaking) {
                 speaking = true;
                 muse_state_set_mode(MUSE_MODE_SPEAKING);
