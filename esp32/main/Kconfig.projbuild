@@ -100,6 +100,15 @@ menu "ESP32 Device SDK"
             Optional OTA parameters in Wi-Fi setup are ignored so provisioning
             can finish normally. Internal builds enable this explicitly.
 
+    config HOMEHUB_OTA_URL_PREFIX
+        string "Only accept OTA URLs that start with this"
+        default ""
+        depends on HOMEHUB_OTA_ENABLED
+        help
+            When set, every update request (control, BLE, Wi-Fi setup), forced
+            or not, is refused before anything is downloaded unless its URL
+            starts with this text. Empty accepts any URL.
+
     config HOMEHUB_SUPPORT_BUG_REPORT
         bool "Enable private support bug reporting"
         default n

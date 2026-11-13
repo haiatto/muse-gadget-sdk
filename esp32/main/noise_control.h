@@ -125,6 +125,15 @@ typedef void (*noise_ctrl_req_cb)(void *ctx, int status, const uint8_t *data,
 int64_t noise_ctrl_req_open(const char *verb, const char *path,
                             const char *const *headers, bool end_body,
                             noise_ctrl_req_cb cb, void *ctx);
+// museStopWatch: as noise_ctrl_req_open, and head (may be NULL) gets each
+// header of the response head, on the session task, just before cb gets its
+// status. The strings are not NUL-terminated and last only for the call.
+typedef void (*noise_ctrl_req_head_cb)(void *ctx, const char *name, size_t name_len,
+                                       const char *value, size_t value_len);
+int64_t noise_ctrl_req_open_head(const char *verb, const char *path,
+                                 const char *const *headers, bool end_body,
+                                 noise_ctrl_req_cb cb, noise_ctrl_req_head_cb head,
+                                 void *ctx);
 // Queues body bytes (copied). Waits up to wait_ms for room; false if none.
 bool noise_ctrl_req_send(int64_t id, const void *data, size_t len,
                          bool end_body, int wait_ms);

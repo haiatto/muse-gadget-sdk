@@ -23,6 +23,7 @@
 #include "cJSON.h"
 #include "esp_heap_caps.h"
 #include "esp_attr.h"
+#include "esp_app_desc.h"
 #include "mbedtls/base64.h"
 #include "msw_app_priv.h"
 
@@ -120,6 +121,8 @@ static cJSON *list(void)
         cJSON_AddNullToObject(payload, "running");
     }
     cJSON_AddNumberToObject(payload, "api_version", MSW_API_VERSION);
+    /* The SDK to use goes with it: the guide's clone line (miniapp/CMakeLists.txt). */
+    cJSON_AddStringToObject(payload, "firmware", esp_app_get_description()->version);
     /* Room for more: Muse backs up (app.source) and removes apps to make it. */
     uint32_t total, free_bytes;
     if (msw_app_space(&total, &free_bytes)) {
@@ -156,7 +159,8 @@ static cJSON *installed(const char *id, uint16_t ver, size_t n, bool run)
 }
 
 /* app.install as the package arrives from the VM (main/app.c): begin, a
- * write per part (0 go on, 1 send it again from the start, -1 stop), then
+ * size if the VM says it, a write per part (0 go on, 1 send it again from the
+ * start, -1 stop), then
  * end with the result. */
 typedef struct {
     msw_app_inst_t *in;
@@ -179,6 +183,13 @@ void *msw_app_install_json_begin(cJSON **err)
         return NULL;
     }
     return j;
+}
+
+/* 0 go on, -1 no room for a package of this size. */
+int msw_app_install_json_size(void *ctx, size_t size)
+{
+    json_inst_t *j = ctx;
+    return msw_app_install_size(j->in, size) ? 0 : -1;
 }
 
 int msw_app_install_json_write(void *ctx, const uint8_t *p, size_t n)

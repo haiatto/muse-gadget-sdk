@@ -1071,12 +1071,14 @@ struct req_op {
     size_t len;
     noise_ctrl_req_cb cb;
     void *ctx;
+    noise_ctrl_req_head_cb head;  // museStopWatch: Open only, may be null
 };
 
 struct req_stream {
     int64_t id;  // 0: free
     noise_ctrl_req_cb cb;
     void *ctx;
+    noise_ctrl_req_head_cb head;  // museStopWatch
 };
 
 static QueueHandle_t s_req_q = nullptr;
@@ -1165,7 +1167,7 @@ static bool req_open(esp_tls_t *tls, ClientSession &session, req_op &op,
         return true;
     }
     ESP_LOGD(TAG, "request %lld: %s %s", (long long)op.id, verb, path);
-    *slot = {op.id, op.cb, op.ctx};
+    *slot = {op.id, op.cb, op.ctx, op.head};
     free(op.data);
     return flush_outbound(tls, session, ws_buf);
 }
@@ -1228,6 +1230,12 @@ static bool req_on_frame(const DecodedServiceFrame &frame) {
     req_stream cur = *s;
     if (frame.kind == ServiceFrameKind::Response) {
         if (frame.response.end_body) *s = {};
+        if (cur.head) {
+            for (size_t i = 0; i < frame.response.headers.size(); i++) {
+                const HeaderView &hv = frame.response.headers[i];
+                cur.head(cur.ctx, hv.key.data(), hv.key.size(), hv.value.data(), hv.value.size());
+            }
+        }
         cur.cb(cur.ctx, frame.response.status, frame.response.body.data(),
                frame.response.body.size(), frame.response.end_body);
     } else if (frame.kind == ServiceFrameKind::BodyChunk) {
@@ -1662,7 +1670,8 @@ static char *build_register_json(void) {
 #endif
         add_command(commands, "app.list",
                     "The installed mini apps, which one runs now, and the room left "
-                    "(free_bytes of space_bytes, max_apps).", nullptr, nullptr);
+                    "(free_bytes of space_bytes, max_apps), and the firmware version (the SDK "
+                    "to build with follows it: app.doc).", nullptr, nullptr);
         cJSON *run_req = cJSON_CreateObject();
         cJSON_AddItemToObject(run_req, "id", string_param("The app's id (app.list)."));
         add_command(commands, "app.run", "Start an installed mini app (ends the one running).",
@@ -2895,6 +2904,13 @@ extern "C" void noise_ctrl_send_command_result(
 extern "C" int64_t noise_ctrl_req_open(const char *verb, const char *path,
                                        const char *const *headers, bool end_body,
                                        noise_ctrl_req_cb cb, void *ctx) {
+    return noise_ctrl_req_open_head(verb, path, headers, end_body, cb, nullptr, ctx);
+}
+
+extern "C" int64_t noise_ctrl_req_open_head(const char *verb, const char *path,
+                                            const char *const *headers, bool end_body,
+                                            noise_ctrl_req_cb cb, noise_ctrl_req_head_cb head,
+                                            void *ctx) {
     if (!s_req_q || !s_connected || !verb || !path || !cb) return 0;
     size_t n = 0, len = strlen(verb) + strlen(path) + 3;
     for (const char *const *h = headers; h && *h; h++, n++) len += strlen(*h) + 1;
@@ -2916,7 +2932,7 @@ extern "C" int64_t noise_ctrl_req_open(const char *verb, const char *path,
     *p = '\0';
     int64_t id = s_req_next_id.fetch_add(1);
     req_op op = {req_op_kind::Open, end_body, id,
-                 reinterpret_cast<uint8_t *>(blob), len, cb, ctx};
+                 reinterpret_cast<uint8_t *>(blob), len, cb, ctx, head};
     if (!req_put(op, 0)) {
         free(blob);
         return 0;
@@ -2930,7 +2946,7 @@ extern "C" bool noise_ctrl_req_send(int64_t id, const void *data, size_t len,
     uint8_t *copy = static_cast<uint8_t *>(malloc(len ? len : 1));
     if (!copy) return false;
     if (len) memcpy(copy, data, len);
-    req_op op = {req_op_kind::Body, end_body, id, copy, len, nullptr, nullptr};
+    req_op op = {req_op_kind::Body, end_body, id, copy, len, nullptr, nullptr, nullptr};
     int64_t deadline = esp_timer_get_time() + (int64_t)wait_ms * 1000;
     while (s_req_queued_bytes > 0
            && s_req_queued_bytes + (int32_t)len > REQ_QUEUE_BYTES) {
@@ -2951,7 +2967,7 @@ extern "C" bool noise_ctrl_req_send(int64_t id, const void *data, size_t len,
 
 extern "C" void noise_ctrl_req_cancel(int64_t id) {
     if (!s_req_q || id < REQ_STREAM_BASE) return;
-    req_op op = {req_op_kind::Cancel, false, id, nullptr, 0, nullptr, nullptr};
+    req_op op = {req_op_kind::Cancel, false, id, nullptr, 0, nullptr, nullptr, nullptr};
     req_put(op, pdMS_TO_TICKS(100));
 }
 

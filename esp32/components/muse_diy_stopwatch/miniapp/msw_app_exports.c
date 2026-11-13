@@ -329,6 +329,7 @@ extern void msw_on_muse_reply(void);
 extern void msw_on_pause(void);
 extern void msw_on_tick(void);
 extern void msw_pcm_write(void);
+extern void msw_pin_read(void);
 extern void msw_port_power(void);
 extern void msw_random(void);
 extern void msw_say(void);
@@ -439,6 +440,7 @@ const struct esp_elfsym msw_app_symbols[] = {
     { "msw_i2c_write", (void *)&msw_i2c_write },
     { "msw_i2c_read", (void *)&msw_i2c_read },
     { "msw_i2c_write_read", (void *)&msw_i2c_write_read },
+    { "msw_pin_read", (void *)&msw_pin_read },
     { "msw_store_put", (void *)&msw_store_put },
     { "msw_store_get", (void *)&msw_store_get },
     { "msw_app_data", (void *)&msw_app_data },
@@ -767,4 +769,4 @@ const struct esp_elfsym msw_app_symbols[] = {
     { "lv_timer_resume", (void *)&lv_timer_resume },
     ESP_ELFSYM_END
 };
-const int msw_app_symbol_count = 379;
+const int msw_app_symbol_count = 380;

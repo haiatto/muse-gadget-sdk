@@ -7,9 +7,15 @@
  * page and M5Unified's pin table. The bus here is the apps' own (another I2C
  * controller), not the internal one at G47/G48. All of it goes off when the
  * app ends.
+ *
+ * Nothing here works until the user has picked "はじめる" on the start screen
+ * (msw_app_core.c, msw_port_allow): an app reaches the port only after the
+ * user has read what the app says it does with it. msw_pin_read makes the
+ * signal pins inputs only; nothing here drives them.
  */
 #include <string.h>
 
+#include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "esp_log.h"
 
@@ -27,6 +33,9 @@ static const char *TAG = "msw_port";
 extern esp_err_t msw_board_port_power(bool on);
 
 static bool s_power;
+static bool s_allowed;          /* the user picked "はじめる" for this run */
+static bool s_pin_in[2];        /* MSW_PIN_YELLOW, MSW_PIN_WHITE made inputs */
+static const int s_pin_gpio[2] = { PORT_SDA, PORT_SCL };
 static i2c_master_bus_handle_t s_bus;
 static int s_khz;
 static struct {
@@ -69,8 +78,26 @@ bool msw_battery(msw_battery_t *out)
 
 /* ---- PORT.A ------------------------------------------------------------------ */
 
+/* msw_app_core.c: the user started the app from the start screen (true), or
+ * the app ended (false). */
+void msw_port_allow(bool on)
+{
+    s_allowed = on;
+}
+
+static bool allowed(const char *fn)
+{
+    if (!s_allowed) {
+        msw_app_logf("%s: PORT.A is not open to this run (no start screen was passed)", fn);
+    }
+    return s_allowed;
+}
+
 bool msw_port_power(bool on)
 {
+    if (on && !allowed("msw_port_power")) {
+        return false;
+    }
     if (on == s_power) {
         return true;
     }
@@ -100,7 +127,7 @@ void msw_i2c_end(void)
 bool msw_i2c_begin(int khz)
 {
     khz = khz <= 0 ? 100 : khz > 400 ? 400 : khz;
-    if (!msw_port_power(true)) {
+    if (!allowed("msw_i2c_begin") || !msw_port_power(true)) {
         return false;
     }
     if (s_bus && khz == s_khz) {
@@ -122,7 +149,37 @@ bool msw_i2c_begin(int khz)
         return false;
     }
     s_khz = khz;
+    s_pin_in[0] = s_pin_in[1] = false;   /* the bus has the pins now */
     return true;
+}
+
+int msw_pin_read(int pin)
+{
+    if (pin != MSW_PIN_YELLOW && pin != MSW_PIN_WHITE) {
+        msw_app_logf("msw_pin_read(%d): MSW_PIN_YELLOW or MSW_PIN_WHITE", pin);
+        return -1;
+    }
+    if (!allowed("msw_pin_read")) {
+        return -1;
+    }
+    if (!s_pin_in[pin]) {
+        if (s_bus) {
+            msw_i2c_end();
+            msw_app_logf("PORT.A I2C ended: msw_pin_read takes the pins");
+        }
+        gpio_config_t io = {
+            .pin_bit_mask = 1ULL << s_pin_gpio[pin],
+            .mode = GPIO_MODE_INPUT,
+            .pull_up_en = GPIO_PULLUP_ENABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
+        };
+        if (gpio_config(&io) != ESP_OK) {
+            return -1;
+        }
+        s_pin_in[pin] = true;
+    }
+    return gpio_get_level(s_pin_gpio[pin]);
 }
 
 static i2c_master_dev_handle_t dev_for(int addr)
@@ -198,5 +255,12 @@ bool msw_i2c_write_read(int addr, const void *out, int n_out, void *in, int n_in
 void msw_port_app_end(void)
 {
     msw_i2c_end();
+    for (int i = 0; i < 2; i++) {
+        if (s_pin_in[i]) {
+            gpio_reset_pin(s_pin_gpio[i]);
+            s_pin_in[i] = false;
+        }
+    }
     msw_port_power(false);
+    s_allowed = false;
 }

@@ -1951,6 +1951,7 @@ extern cJSON *msw_play_command(const char *command, const cJSON *params);
 extern cJSON *msw_app_install_json(const uint8_t *data, size_t n, bool run) __attribute__((weak));
 extern void *msw_app_install_json_begin(cJSON **err) __attribute__((weak));
 extern int msw_app_install_json_write(void *ctx, const uint8_t *p, size_t n) __attribute__((weak));
+extern int msw_app_install_json_size(void *ctx, size_t size) __attribute__((weak));
 extern cJSON *msw_app_install_json_end(void *ctx, const char *fetch_code, const char *fetch_msg,
                                        bool run) __attribute__((weak));
 /* museStopWatch: the whole-device guide (components/muse_diy_stopwatch/ui/msw_doc.c). */
@@ -1968,6 +1969,12 @@ typedef struct {
 static int app_install_part(const uint8_t *data, size_t len, void *user) {
     app_install_ctx_t *ctx = user;
     return msw_app_install_json_write(ctx->inst, data, len);
+}
+
+/* The package's size, before its first part: room for all of it is made first. */
+static int app_install_size(size_t size, void *user) {
+    app_install_ctx_t *ctx = user;
+    return msw_app_install_json_size ? msw_app_install_json_size(ctx->inst, size) : 0;
 }
 
 static void app_install_streamed(size_t total, const char *code, const char *message,
@@ -2081,8 +2088,9 @@ static cJSON *on_ws_command(
                 free(ctx);
                 return err;
             }
-            if (!image_fetch_vm_stream(path->valuestring, 16 * 1024 * 1024, app_install_part,
-                                       app_install_streamed, ctx, &code, &message)) {
+            if (!image_fetch_vm_stream_sized(path->valuestring, 16 * 1024 * 1024, app_install_part,
+                                             app_install_size, app_install_streamed, ctx, &code,
+                                             &message)) {
                 cJSON_Delete(msw_app_install_json_end(ctx->inst, "stopped", "", false));
                 free(ctx);
                 return command_error(code, message);

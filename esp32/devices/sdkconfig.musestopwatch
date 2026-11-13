@@ -30,3 +30,7 @@ CONFIG_LV_USE_SNAPSHOT=y
 # museStopWatch: smaller voice session buffers (128 KB reply MP3, 2 s mic backlog,
 # 1 s decoded audio; about 610 KB less PSRAM), so mini apps have room (2026-11-10).
 CONFIG_MUSE_HATCH_COMPACT_BUFFERS=y
+
+# museStopWatch: firmware updates only from our own Releases (signed with our
+# key); any other URL, the official SDK's included, is refused even with force.
+CONFIG_HOMEHUB_OTA_URL_PREFIX="https://github.com/haiatto/museStopWatch/releases/download/"

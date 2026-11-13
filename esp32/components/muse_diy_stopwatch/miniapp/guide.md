@@ -26,7 +26,10 @@ Museストップウォッチのつくり: 466 x 466 の丸いタッチ画面（�
    `apps/<名前>/build/<id>.mswapp` ができる。ファームにない関数を呼んでいると失敗し、
    その名前を出す。`.mswapp` には、フォルダの `app.json`・`.c`・`.h` も入る
    （ソースはこのフォルダにまとめる）。ソースは zlib で縮めて入れる。`data/` のファイルも入る。
-   ソースを入れたくないときは `--no-source` を付ける。必ず最新の `sdk/build.py` を使う（`git pull`）。
+   ソースを入れたくないときは `--no-source` を付ける。必ず上の clone の行と同じ SDK の `sdk/build.py` を使う。
+   **SDK の版**: 上の clone の行は、このファームに合う SDK を指す。開発中のファーム（`app.list` の
+   `firmware` が 999.0.0）は main（`git pull` で最新にする）。リリースのファームは、その版のタグ（`--branch v<版>`）。
+   ファームが替わったら（`app.list` の `firmware` が前と違う）、このガイドを読み直し、その clone の行の SDK に入れ直す。
 4. **入れる**: `app.install` の `path` に VM 上のファイルのパスを入れる
    （`run: true` で入れたあと起動）。同じ `id` なら上書き。ソースもMuseストップウォッチに残るので、
    VM のファイルがなくなっても `app.source`（id）で取り出して直せる。
@@ -52,6 +55,10 @@ Museストップウォッチのつくり: 466 x 466 の丸いタッチ画面（�
 ```
 id: a-z 0-9 _（23 文字まで）。name: 31 バイトまで（日本語は 1 文字 3 バイト）。
 icon: 文字で描く絵で 32 x 32 まで、'.' は透明。16 x 16 以下なら 2 倍の大きさで描く。
+port: PORT.A を使うアプリ（msw_port_power・msw_i2c_begin・msw_pin_read を呼ぶ）だけ必要。ユーザー向けの文で、
+`connect` に PORT.A につなぐもの（1 行、120 バイトまで）、`about` にそれでアプリがすること（240 バイトまで）。
+例 `"port": {"connect": "M5Stack の Dual Button ユニット", "about": "2つのボタンで、画面のキャラを左右に動かします"}`。
+ないと `sdk/build.py` が止まる。アプリが始まる前に、画面いっぱいに両方が出る。
 
 ## アプリの形
 
@@ -117,6 +124,12 @@ API の全部は `app.api`（msw_app.h）で読める。要約:
   5V も入れる。msw_i2c_scan で返事をするアドレスを探し、msw_i2c_write・msw_i2c_read・msw_i2c_write_read
   （レジスタを読む）で話す。5V だけなら msw_port_power。アプリが終わると全部切れる。5V は電池を使う。
   例は apps/sensors（時刻・電池・歩数・PORT.A の一覧）。
+  - ボタンやスイッチのユニット（I2C でないもの）は msw_pin_read(MSW_PIN_YELLOW か MSW_PIN_WHITE): 1 か 0、失敗は -1。
+    ピンは入力（内部のプルアップ付き）になり、GND へのボタンは押している間 0。I2C は閉じる（msw_i2c_begin で戻る）。
+    出力はない。電源の要るユニットは msw_port_power(true) も。
+  - PORT.A を使うアプリは、始まる前に画面へ app.json の `port`（つなぐもの、すること）と「はじめる」「やめる」が出て、
+    ユーザーが青ボタンを押しながら「はじめる」をタッチしてから app_main が呼ばれる。`app.run` はすぐ返るので、
+    ユーザーに、青ボタンを押しながら「はじめる」をタッチしてもらうよう伝える。押されるまで、この関数はどれも失敗する。
 - **傾き**: msw_imu(&m) — 画面の向きの軸（x 右、y 下）で g 単位の加速度。
   画面の面での重力は (-m.ax, -m.ay)
 - **保存**: msw_store_put / msw_store_get（1 キー 4 KB まで。ハイスコアなど）

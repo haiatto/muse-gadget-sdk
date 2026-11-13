@@ -132,6 +132,7 @@ typedef struct {
     uint8_t *body;
     size_t chunk, body_len, body_pos;
     size_t next_offset;
+    size_t total;    // the file's size from the first reply's head, 0 if not said
     // Two bytes read to sniff the format, handed back to the first read.
     uint8_t peek[2];
     size_t peek_len;
@@ -578,6 +579,8 @@ static struct {
     bool done;
     bool complete;       // the whole body arrived
     bool too_large;      // more than was asked for
+    size_t range_total;  // "Content-Range: bytes a-b/N" on the head: N
+    size_t length;       // "Content-Length" on the head
 } s_vm;
 
 // How one request for a range ended.
@@ -585,7 +588,46 @@ typedef struct {
     size_t len;
     int status;
     bool complete, too_large, not_sent;
+    size_t total;        // the whole file's size, if the head said it
 } vm_reply_t;
+
+static bool name_is(const char *name, size_t len, const char *want) {
+    return strlen(want) == len && !strncasecmp(name, want, len);
+}
+
+static size_t parse_size(const char *p, size_t len) {
+    size_t n = 0;
+    bool any = false;
+    for (size_t i = 0; i < len && p[i] >= '0' && p[i] <= '9'; i++) {
+        n = n * 10 + (size_t)(p[i] - '0');
+        any = true;
+    }
+    return any ? n : 0;
+}
+
+// museStopWatch: the reply head's size headers, for the file's size.
+static void vm_on_head(void *ctx, const char *name, size_t name_len, const char *value,
+                       size_t value_len) {
+    size_t n = 0;
+    bool range = name_is(name, name_len, "content-range");
+    if (range) {
+        const char *slash = memchr(value, '/', value_len);
+        if (slash) n = parse_size(slash + 1, value_len - (size_t)(slash + 1 - value));
+    } else if (name_is(name, name_len, "content-length")) {
+        n = parse_size(value, value_len);
+    } else {
+        return;
+    }
+    xSemaphoreTake(s_vm.lock, portMAX_DELAY);
+    if ((uint32_t)(uintptr_t)ctx == s_vm.gen && !s_vm.done) {
+        if (range) {
+            s_vm.range_total = n;
+        } else {
+            s_vm.length = n;
+        }
+    }
+    xSemaphoreGive(s_vm.lock);
+}
 
 static void vm_on_frame(void *ctx, int status, const uint8_t *data, size_t len, bool end) {
     xSemaphoreTake(s_vm.lock, portMAX_DELAY);
@@ -630,10 +672,11 @@ static void vm_get_range(fetch_t *f, vm_reply_t *out) {
     s_vm.len = 0;
     s_vm.status = 0;
     s_vm.done = s_vm.complete = s_vm.too_large = false;
+    s_vm.range_total = s_vm.length = 0;
     xSemaphoreGive(s_vm.lock);
 
-    int64_t id = noise_ctrl_req_open("GET", f->url, headers, true, vm_on_frame,
-                                     (void *)(uintptr_t)token);
+    int64_t id = noise_ctrl_req_open_head("GET", f->url, headers, true, vm_on_frame,
+                                          vm_on_head, (void *)(uintptr_t)token);
     while (id && !vm_done()) {
         if (esp_timer_get_time() >= f->deadline_us) {
             f->timed_out = true;
@@ -649,6 +692,7 @@ static void vm_get_range(fetch_t *f, vm_reply_t *out) {
     out->status = s_vm.status;
     out->complete = s_vm.complete;
     out->too_large = s_vm.too_large;
+    out->total = s_vm.status == 206 ? s_vm.range_total : s_vm.status == 200 ? s_vm.length : 0;
     xSemaphoreGive(s_vm.lock);
     out->not_sent = !id;
     if (id && !out->complete) noise_ctrl_req_cancel(id);
@@ -667,6 +711,7 @@ static bool vm_next_range(fetch_t *f, vm_reply_t *out) {
     // A daemon ignoring Range sends the whole file, fine if it fits.
     if (out->status != 206 && !(out->status == 200 && f->next_offset == 0)) return false;
     f->body_len = out->len;
+    if (!f->total) f->total = out->total;
     f->next_offset += out->len;
     f->bytes += out->len;
     if (out->status == 200 || out->len < f->chunk) f->eof = true;
@@ -1007,6 +1052,7 @@ typedef struct {
     size_t max;
     image_fetch_file_cb file_done;
     image_fetch_sink_cb sink;           // set: image_fetch_vm_stream
+    image_fetch_size_cb size;           // may be NULL
     image_fetch_stream_cb stream_done;
 } file_fetch_t;
 
@@ -1022,6 +1068,15 @@ static const char *stream_parts(file_fetch_t *ff, size_t *total, const char **me
     }
     const char *code = NULL;
     size_t len = 0;
+    if (f->total > ff->max) {
+        free(buf);
+        *message = "the file is larger than allowed";
+        return "too_large";
+    }
+    if (ff->size && ff->size(f->total, f->user) < 0) {
+        free(buf);
+        return "stopped";
+    }
     for (int restarts = 0;;) {
         int got = vm_read(f, buf, cap);
         if (got < 0) {
@@ -1139,22 +1194,30 @@ static void file_task(void *arg) {
 }
 
 static bool vm_file_start(const char *path, size_t max, image_fetch_file_cb done,
-                          image_fetch_sink_cb sink, image_fetch_stream_cb stream_done,
+                          image_fetch_sink_cb sink, image_fetch_size_cb size,
+                          image_fetch_stream_cb stream_done,
                           void *user, const char **code, const char **message);
 
 bool image_fetch_vm_file(const char *path, size_t max, image_fetch_file_cb done,
                          void *user, const char **code, const char **message) {
-    return vm_file_start(path, max, done, NULL, NULL, user, code, message);
+    return vm_file_start(path, max, done, NULL, NULL, NULL, user, code, message);
 }
 
 bool image_fetch_vm_stream(const char *path, size_t max, image_fetch_sink_cb sink,
                            image_fetch_stream_cb done, void *user, const char **code,
                            const char **message) {
-    return vm_file_start(path, max, NULL, sink, done, user, code, message);
+    return vm_file_start(path, max, NULL, sink, NULL, done, user, code, message);
+}
+
+bool image_fetch_vm_stream_sized(const char *path, size_t max, image_fetch_sink_cb sink,
+                                 image_fetch_size_cb size, image_fetch_stream_cb done,
+                                 void *user, const char **code, const char **message) {
+    return vm_file_start(path, max, NULL, sink, size, done, user, code, message);
 }
 
 static bool vm_file_start(const char *path, size_t max, image_fetch_file_cb done,
-                          image_fetch_sink_cb sink, image_fetch_stream_cb stream_done,
+                          image_fetch_sink_cb sink, image_fetch_size_cb size,
+                          image_fetch_stream_cb stream_done,
                           void *user, const char **code, const char **message) {
     const char *name = path + strspn(path, "/");
     if (!*name) {
@@ -1184,6 +1247,7 @@ static bool vm_file_start(const char *path, size_t max, image_fetch_file_cb done
         ff->max = max;
         ff->file_done = done;
         ff->sink = sink;
+        ff->size = size;
         ff->stream_done = stream_done;
         ok = xTaskCreate(file_task, "vm_file", FETCH_STACK_BYTES, ff, 4, NULL) == pdPASS;
     }

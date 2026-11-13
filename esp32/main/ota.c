@@ -357,6 +357,23 @@ void ota_start(const char *url, bool force, ota_status_cb cb, void *user) {
         }
         return;
     }
+#ifdef CONFIG_HOMEHUB_OTA_URL_PREFIX
+    // Only the configured source (museStopWatch: its own Releases), for every
+    // route and even with force. 2026-11-13.
+    const char *prefix = CONFIG_HOMEHUB_OTA_URL_PREFIX;
+    if (*prefix && strncmp(ctx->url, prefix, strlen(prefix)) != 0) {
+        ESP_LOGW(TAG, "OTA refused: the URL is not from %s", prefix);
+        free(ctx->url);
+        free(ctx);
+        if (cb) {
+            ota_event_t ev = { .result = OTA_RESULT_FAILED,
+                               .detail = "url not allowed: updates come only from " CONFIG_HOMEHUB_OTA_URL_PREFIX,
+                               .running_version = esp_app_get_description()->version };
+            cb(&ev, user);
+        }
+        return;
+    }
+#endif
     // 8 KB stack: TLS handshake + flash writes during the OTA download.
     if (xTaskCreate(ota_task, "ota", 16384, ctx, 5, NULL) != pdPASS) {
         ESP_LOGE(TAG, "could not start OTA task");

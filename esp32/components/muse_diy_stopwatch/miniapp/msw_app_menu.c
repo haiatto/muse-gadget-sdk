@@ -16,6 +16,11 @@
  * as it is said. All of it is inside the box, which is opaque: with frame
  * drawing lvgl must not redraw any place outside it.
  *
+ * The same box is the start screen of an app that uses PORT.A
+ * (msw_menu_open_start), over the whole screen: what the app says to plug
+ * in and what it does with it, "はじめる" and "やめる". The app starts only after "はじめる" tapped while the blue
+ * button is held, so a stray tap does not start it.
+ *
  * Open, close and msw_menu_poll run on the app task with the display locked;
  * the button events run on the lvgl task and only set s_choice.
  */
@@ -352,6 +357,80 @@ void msw_menu_open(const char *title)
     lv_obj_invalidate(s_box);
 }
 
+/* The start screen fills the round screen (466 x 466): the app has drawn
+ * nothing yet, so there is no frame to keep. Each line is placed where the
+ * circle is wide enough for it. */
+#define SCR 466
+#define START_BTN_Y 338
+#define START_BTN_W 150
+static lv_obj_t *s_start_hint;   /* "青ボタンを押しながら…" */
+static lv_obj_t *s_start_go;     /* "はじめる": grey until the blue button is held */
+#define GO_OFF 0x5f6670
+#define GO_ON 0x81c784
+
+/* The blue button went down (true) or up: "はじめる" turns green or grey. */
+void msw_menu_start_ready(bool on)
+{
+    if (s_start_go) {
+        lv_obj_set_style_bg_color(s_start_go, lv_color_hex(on ? GO_ON : GO_OFF), 0);
+    }
+}
+
+/* "はじめる" was tapped without the blue button: the hint turns red. */
+void msw_menu_start_nudge(void)
+{
+    if (s_start_hint) {
+        lv_obj_set_style_text_color(s_start_hint, lv_color_hex(0xff5252), 0);
+    }
+}
+
+static lv_obj_t *start_text(const char *text, uint32_t color, int y, int w, int h)
+{
+    lv_obj_t *l = lv_label_create(s_box);
+    lv_obj_set_style_text_font(l, msw_font(0), 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    if (w) {
+        lv_label_set_long_mode(l, LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_set_width(l, w);
+        if (h) {
+            lv_obj_set_height(l, h);
+        }
+    }
+    lv_label_set_text(l, text);
+    lv_obj_align(l, LV_ALIGN_TOP_MID, 0, y);
+    return l;
+}
+
+void msw_menu_open_start(const char *title, const char *connect, const char *about)
+{
+    if (s_box) {
+        return;
+    }
+    atomic_store(&s_choice, MSW_MENU_NONE);
+    s_box = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(s_box);
+    lv_obj_set_size(s_box, SCR, SCR);
+    lv_obj_set_style_bg_opa(s_box, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_box, lv_color_hex(0x1c2430), 0);
+    lv_obj_remove_flag(s_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_box, LV_OBJ_FLAG_CLICKABLE);   /* taps don't reach what is under it */
+    lv_obj_center(s_box);
+    start_text(title && title[0] ? title : "アプリ", 0xffffff, 52, 300, 0);
+    start_text("PORT.A（Grove）につなぐもの", 0xffd54f, 88, 0, 0);
+    start_text(connect && connect[0] ? connect : "（このアプリは、書いていません）", 0xffffff, 112, 340, 46);
+    start_text("このアプリがすること", 0xffd54f, 168, 0, 0);
+    start_text(about && about[0] ? about : "（このアプリは、書いていません）", 0xe0e0e0, 192, 390, 96);
+    s_start_hint = start_text("青ボタンを押しながら「はじめる」", 0x4fc3f7, 300, 0, 0);
+    lv_obj_t *quit = add_button(s_box, "やめる", 0xef9a9a, START_BTN_Y, MSW_MENU_QUIT);
+    lv_obj_set_width(quit, START_BTN_W);
+    lv_obj_align(quit, LV_ALIGN_TOP_MID, -(START_BTN_W / 2 + 8), START_BTN_Y);
+    lv_obj_t *go = add_button(s_box, "はじめる", GO_OFF, START_BTN_Y, MSW_MENU_GO_ON);
+    s_start_go = go;
+    lv_obj_set_width(go, START_BTN_W);
+    lv_obj_align(go, LV_ALIGN_TOP_MID, START_BTN_W / 2 + 8, START_BTN_Y);
+}
+
 void msw_menu_close(void)
 {
     if (s_box) {
@@ -359,6 +438,8 @@ void msw_menu_close(void)
         s_box = NULL;
     }
     s_muse = s_text = NULL;   /* children of the box */
+    s_start_hint = NULL;
+    s_start_go = NULL;
     free_strips();   /* the box and its image are gone: nothing draws Muse now */
     atomic_store(&s_choice, MSW_MENU_NONE);
 }

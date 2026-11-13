@@ -339,7 +339,21 @@ static void *elf_rd_part(elf_rd_t *rd, size_t off, size_t len)
 /* Every symbol the ELF needs must be one the firmware gives. On failure,
  * msg lists the missing ones. An avatar (idea 009) runs inside the screen's
  * drawing, so of the msw_* functions it may use msw_avatar_define only. */
-static bool check_symbols(elf_rd_t *rd, bool avatar, char *msg, size_t msg_len)
+/* The functions that reach outside through PORT.A (msw_app_port.c): an app
+ * that imports any of them gets the start screen. msw_i2c_write and the rest
+ * need msw_i2c_begin first. */
+static bool is_port_fn(const char *name)
+{
+    static const char *const fns[] = { "msw_port_power", "msw_i2c_begin", "msw_pin_read" };
+    for (size_t i = 0; i < sizeof(fns) / sizeof(fns[0]); i++) {
+        if (!strcmp(name, fns[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool check_symbols(elf_rd_t *rd, bool avatar, bool *port, char *msg, size_t msg_len)
 {
     elf_ehdr_t eh;
     if (elf_rd_read(rd, 0, &eh, sizeof(eh)) != 0 || memcmp(eh.ident, "\x7f" "ELF", 4)
@@ -377,6 +391,9 @@ static bool check_symbols(elf_rd_t *rd, bool avatar, char *msg, size_t msg_len)
                 continue;
             }
             const char *name = str + sym[k].name;
+            if (port && is_port_fn(name)) {
+                *port = true;
+            }
             if (avatar && !strncmp(name, "msw_", 4) && strcmp(name, "msw_avatar_define")) {
                 snprintf(msg, msg_len, "an avatar can't call %s: of the msw_ functions only msw_avatar_define", name);
                 ok = false;
@@ -565,7 +582,7 @@ static bool check_package(const uint8_t *data, size_t n, const char **code, char
         return false;
     }
     elf_rd_t rd = { .mem = data + sizeof(*h) + h->icon_size, .size = h->elf_size };
-    if (!check_symbols(&rd, avatar, msg, msg_len)) {
+    if (!check_symbols(&rd, avatar, NULL, msg, msg_len)) {
         *code = "missing_symbol";
         return false;
     }
@@ -652,6 +669,31 @@ static void inst_write(void *arg)
     }
     in->w = msw_pkgs_begin(0, pinned(), &in->code, in->msg, sizeof(in->msg));
     in->restart = in->w != NULL;
+}
+
+/* The size became known before any part (app.install from the VM): start
+ * the writer again with it, so room for the whole package is made now, not
+ * after it overflows and has to be sent again (2026-11-13). */
+static void inst_size(void *arg)
+{
+    msw_app_inst_t *in = arg;
+    size_t written;
+    msw_pkgs_written(in->w, &written);
+    if (written) {
+        return;
+    }
+    msw_pkgs_abort(in->w);
+    in->w = msw_pkgs_begin(in->size, pinned(), &in->code, in->msg, sizeof(in->msg));
+}
+
+bool msw_app_install_size(msw_app_inst_t *in, size_t size)
+{
+    if (!in || !in->w || !size) {
+        return in && in->w;
+    }
+    in->size = size;
+    msw_app_service(inst_size, in);
+    return in->w != NULL;
 }
 
 bool msw_app_install_write(msw_app_inst_t *in, const uint8_t *p, size_t n, bool *restart)
@@ -850,6 +892,7 @@ typedef struct {
     const char *code;
     const uint8_t *pkg;     /* in flash; compacting leaves it (pinned) */
     size_t pkg_n;
+    bool port;              /* calls PORT.A: the start screen first */
 } run_t;
 
 static run_t *volatile s_run;      /* the app now, set while its task lives */
@@ -1076,11 +1119,81 @@ static void busy(const char *in)
     }
 }
 
+static const char *pkg_text(run_t *r, const char *name, char *buf, size_t cap);
+
+/* An app that uses PORT.A: show what it says to plug in and what it does
+ * with it (app.json "port"), and wait
+ * for "はじめる" tapped while the blue button is held (a stray tap or a
+ * stray press alone does not start it). False for "やめる", the yellow
+ * button or app.stop. On "はじめる" the screen stays up: app_task takes it
+ * away once the app's own screen is loaded, so the launcher under it does
+ * not show for a moment in between (2026-11-13). */
+static bool start_screen(run_t *r)
+{
+    static EXT_RAM_BSS_ATTR char what[400];   /* connect, a newline, about (sdk/build.py) */
+    pkg_text(r, ".port", what, sizeof(what));
+    char *about = strchr(what, '\n');
+    if (about) {
+        *about++ = 0;
+    }
+    msw_app_logf("%s: uses PORT.A; waiting for \"はじめる\" with the blue button held", r->id);
+    atomic_store(&s_button_events, 0);
+    muse_board->display_lock(-1);
+    msw_menu_open_start(r->name, what, about);
+    muse_board->display_unlock();
+    int choice = MSW_MENU_NONE;
+    int64_t poked = 0;
+    bool blue = false, shown = false;
+    while (choice == MSW_MENU_NONE && !atomic_load(&s_stop)) {
+        unsigned ev = atomic_exchange(&s_button_events, 0);
+        for (int i = 0; i < 8 && ev; i++, ev >>= 4) {
+            unsigned e = ev & 0xFu;
+            if (e & EV_YELLOW) {
+                choice = (e & EV_PRESS) ? MSW_MENU_QUIT : choice;
+            } else if (e & (EV_PRESS | EV_RELEASE)) {
+                blue = e & EV_PRESS;
+            }
+        }
+        if (choice == MSW_MENU_NONE) {
+            muse_board->display_lock(-1);
+            if (blue != shown) {
+                msw_menu_start_ready(blue);
+                shown = blue;
+            }
+            choice = msw_menu_choice();
+            if (choice == MSW_MENU_GO_ON && !blue) {
+                msw_menu_start_nudge();
+                choice = MSW_MENU_NONE;
+            }
+            muse_board->display_unlock();
+        }
+        int64_t now = esp_timer_get_time();
+        if (now - poked > 1000000) {
+            muse_state_poke();       /* no screen sleep while it waits */
+            poked = now;
+        }
+        vTaskDelay(pdMS_TO_TICKS(30));
+    }
+    bool go = choice == MSW_MENU_GO_ON;
+    if (!go) {
+        muse_board->display_lock(-1);
+        msw_menu_close();
+        muse_board->display_unlock();
+    }
+    atomic_store(&s_button_events, 0);
+    msw_app_logf("%s: %s", r->id, go ? "the user picked \"はじめる\"" : "not started (やめる, the yellow button or app.stop)");
+    return go;
+}
+
 static void app_task(void *arg)
 {
     run_t *r = arg;
     char *argv[] = { r->id, NULL };
     mark_running(r->id);
+    bool started = !r->port || start_screen(r);
+    if (r->port && started) {
+        msw_port_allow(true);
+    }
     msw_sound_app(true);
     muse_board->display_lock(-1);
     uintptr_t lo = esp_elf_runtime_base(&r->elf);
@@ -1088,6 +1201,9 @@ static void app_task(void *arg)
     msw_api_begin(r->id, lo, lo + r->elf.text_alloc_size, (uintptr_t)r->elf.ptext);
     msw_api_set_rodata(r->elf.sec[ELF_SEC_TEXT].v_addr, r->elf.sec[ELF_SEC_RODATA].v_addr,
                        r->elf.sec[ELF_SEC_RODATA].size, r->elf.sec[ELF_SEC_RODATA].addr);
+    if (r->port && started) {
+        msw_menu_close();     /* the start screen, now over the app's screen */
+    }
     s_watch_id = r->id;
     s_stuck_logged = false;
     esp_timer_handle_t watcher = NULL;
@@ -1095,12 +1211,15 @@ static void app_task(void *arg)
     if (esp_timer_create(&wa, &watcher) == ESP_OK) {
         esp_timer_start_periodic(watcher, 1000 * 1000);
     }
-    busy("app_main");
-    run_init_arrays(&r->elf);
-    int rc = r->elf.entry(1, argv);
-    busy(NULL);
+    int rc = 1;
+    if (started) {
+        busy("app_main");
+        run_init_arrays(&r->elf);
+        rc = r->elf.entry(1, argv);
+        busy(NULL);
+    }
     muse_board->display_unlock();
-    if (rc != 0) {
+    if (started && rc != 0) {
         msw_app_logf("%s: app_main returned %d", r->id, rc);
     }
     int64_t start = esp_timer_get_time(), next = start, poked = start;
@@ -1201,7 +1320,7 @@ static void app_task(void *arg)
 /* Checks and relocates the package's ELF into elf, from where it lies in
  * flash: no copy of the package in PSRAM. On the service task. */
 static bool load_elf(const char *id, bool avatar, esp_elf_t *elf, char *name, const char **code,
-                     char *err, size_t err_len, const uint8_t **pkg_out, size_t *pkg_n)
+                     char *err, size_t err_len, const uint8_t **pkg_out, size_t *pkg_n, bool *port)
 {
     size_t n = 0;
     const uint8_t *pkg = msw_pkgs_find(id, avatar, &n);
@@ -1225,7 +1344,7 @@ static bool load_elf(const char *id, bool avatar, esp_elf_t *elf, char *name, co
     }
     const uint8_t *elf_at = pkg + sizeof(*h) + h->icon_size;
     elf_rd_t rd = { .mem = elf_at, .size = h->elf_size };
-    if (!check_symbols(&rd, avatar, err, err_len)) {
+    if (!check_symbols(&rd, avatar, port, err, err_len)) {
         *code = "missing_symbol";
         return false;
     }
@@ -1261,7 +1380,8 @@ static bool load_elf(const char *id, bool avatar, esp_elf_t *elf, char *name, co
 static void load(void *arg)
 {
     run_t *r = arg;
-    r->loaded = load_elf(r->id, false, &r->elf, r->name, &r->code, r->err, sizeof(r->err), &r->pkg, &r->pkg_n);
+    r->loaded = load_elf(r->id, false, &r->elf, r->name, &r->code, r->err, sizeof(r->err), &r->pkg, &r->pkg_n,
+                         &r->port);
 }
 
 typedef struct {
@@ -1277,7 +1397,7 @@ typedef struct {
 static void load_avatar(void *arg)
 {
     avatar_load_t *a = arg;
-    a->ok = load_elf(a->id, true, a->elf, a->name, &a->code, a->err, a->err_len, NULL, NULL);
+    a->ok = load_elf(a->id, true, a->elf, a->name, &a->code, a->err, a->err_len, NULL, NULL, NULL);
 }
 
 bool msw_app_load_avatar(const char *id, esp_elf_t *elf, char *name, const char **code, char *err, size_t err_len)
@@ -1370,6 +1490,28 @@ bool msw_app_start(const char *id, const char **code, char *msg, size_t msg_len)
     atomic_fetch_add(&s_changes, 1);
     msw_app_logf("%s: started", id);
     return true;
+}
+
+/* A text file of r's package (sdk/build.py's ".port") into buf, cut to fit;
+ * "" when there is none. */
+static const char *pkg_text(run_t *r, const char *name, char *buf, size_t cap)
+{
+    pkg_parts_t parts;
+    buf[0] = 0;
+    if (!r->pkg || !pkg_parts(r->pkg, r->pkg_n, &parts)) {
+        return buf;
+    }
+    for (uint32_t i = 0; i < parts.nfiles; i++) {
+        msw_pkg_file_t f;
+        memcpy(&f, &parts.files[i], sizeof(f));
+        if (!strcmp(f.name, name)) {
+            size_t n = f.size < cap - 1 ? f.size : cap - 1;
+            memcpy(buf, r->pkg + f.off, n);
+            buf[n] = 0;
+            break;
+        }
+    }
+    return buf;
 }
 
 /* An app's data file (msw_app.h), where it lies in flash. From the app's

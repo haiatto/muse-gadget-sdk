@@ -104,6 +104,9 @@ bool msw_app_space(uint32_t *total, uint32_t *free_bytes);
  * drops it). */
 typedef struct msw_app_inst msw_app_inst_t;
 msw_app_inst_t *msw_app_install_begin(size_t size, const char **code, char *msg, size_t msg_len);
+/* The package's size, if it becomes known before the first write. False:
+ * there is no room for it (the reason goes to msw_app_install_end). */
+bool msw_app_install_size(msw_app_inst_t *in, size_t size);
 bool msw_app_install_write(msw_app_inst_t *in, const uint8_t *p, size_t n, bool *restart);
 bool msw_app_install_end(msw_app_inst_t *in, bool ok, char *id_out, uint16_t *ver_out, const char **code,
                          char *msg, size_t msg_len);
@@ -160,6 +163,14 @@ void msw_menu_close(void);
 bool msw_menu_is_open(void);
 void msw_menu_poll(void);                    /* while open: Muse's face and caption */
 int msw_menu_choice(void);                   /* the button tapped since the last call */
+/* The start screen of an app that uses PORT.A: what it says to plug in and
+ * what it does with it,
+ * "はじめる" (MSW_MENU_GO_ON, counted only with the blue button held) and
+ * "やめる" (MSW_MENU_QUIT). Closed with
+ * msw_menu_close. Display locked. */
+void msw_menu_open_start(const char *title, const char *connect, const char *about);
+void msw_menu_start_nudge(void);
+void msw_menu_start_ready(bool on);          /* the blue button held: "はじめる" green, else grey */             /* "はじめる" without the blue button held */
 int msw_api_fps(void);
 bool msw_api_exit_asked(void);
 void msw_api_call_exit_cb(void);
@@ -178,6 +189,7 @@ void msw_gfx_overlay_changed(void);
 /* ---- sound (msw_app_sound.c) ---- */
 void msw_sound_init(void);
 void msw_mic_app_end(void);
+void msw_port_allow(bool on);               /* msw_app_port.c: the user picked "はじめる" */
 void msw_port_app_end(void);                /* msw_app_port.c: PORT.A off with the app */                 /* msw_app_mic.c: the mic goes off with the app */
 void msw_sound_app(bool running);            /* keeps the speaker open while an app runs */
 

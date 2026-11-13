@@ -52,7 +52,7 @@ typedef struct _lv_font_t lv_font_t;
 extern "C" {
 #endif
 
-#define MSW_API_VERSION 2   /* 2: msw_app_data (2026-11-11) */
+#define MSW_API_VERSION 3   /* 2: msw_app_data (2026-11-11); 3: msw_pin_read, the PORT.A start screen (2026-11-13) */
 #define MSW_SCREEN_W 466
 #define MSW_SCREEN_H 466
 
@@ -246,7 +246,13 @@ bool msw_battery(msw_battery_t *out);            /* read every few seconds by th
 /* ---- PORT.A (the Grove port on the case) -------------------------------- */
 
 /* HY2.0-4P: GND, 5V, G10 (SDA, yellow), G11 (SCL, white). Everything here
- * goes off when the app ends. */
+ * goes off when the app ends.
+ *
+ * An app that calls any of these needs "port" in its app.json (sdk/build.py):
+ * "connect", what to plug in, and "about", what the app does with it, for the
+ * user. Before the app starts, the StopWatch shows both with "はじめる" and
+ * "やめる"; the app runs only
+ * after the user taps "はじめる" while holding the blue button. */
 bool msw_port_power(bool on);                    /* the 5V pin (uses the battery) */
 /* PORT.A as an I2C bus, 100 or 400 kHz; also turns the 5V pin on. */
 bool msw_i2c_begin(int khz);
@@ -256,6 +262,16 @@ bool msw_i2c_write(int addr, const void *data, int n);
 bool msw_i2c_read(int addr, void *data, int n);
 /* Writes then reads without a stop between: reading a sensor's register. */
 bool msw_i2c_write_read(int addr, const void *out, int n_out, void *in, int n_in);
+
+/* PORT.A's two signal pins as inputs (buttons, switches, a sensor's on/off
+ * output): 1 high, 0 low, -1 error. The pin becomes an input with the
+ * internal pull-up (about 45 kOhm to 3.3 V), so a button to GND reads 0 while
+ * pressed. It ends the I2C bus; msw_i2c_begin takes the pins back. There is
+ * no output: the pins never drive anything. The 5V pin stays as it is:
+ * msw_port_power(true) for a unit that needs power. */
+#define MSW_PIN_YELLOW 0   /* G10 (SDA) */
+#define MSW_PIN_WHITE 1    /* G11 (SCL) */
+int msw_pin_read(int pin);
 
 /* ---- storage ------------------------------------------------------------- */
 

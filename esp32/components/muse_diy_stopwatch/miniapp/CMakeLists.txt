@@ -10,7 +10,27 @@ if(CONFIG_MUSE_BOARD_M5STACK_STOPWATCH)
              "msw_app_launcher.c" "msw_app_cmd.c" "msw_app_menu.c" "msw_app_exports.c"
              "msw_app_crash.c" "msw_app_shot.c" "msw_avatar.c" "msw_app_mic.c" "msw_app_port.c"
              "msw_app_pkgs.c")
-    set(embed "guide.md" "avatar_guide.md" "include/msw_app.h")
+    # The guide tells Muse which SDK to clone. A release firmware (version.txt
+    # not 999.0.0) points it at the tag of its own version, v<version>, so its
+    # SDK stays the one it was built with; a development build keeps main
+    # (2026-11-13). The copy in the build folder is the one embedded.
+    idf_build_get_property(msw_ver PROJECT_VER)
+    file(READ "${CMAKE_CURRENT_LIST_DIR}/guide.md" msw_guide)
+    set(msw_clone_re "git clone --depth 1 (https://github\\.com/[^ `]+)")
+    if(NOT msw_guide MATCHES "${msw_clone_re}")
+        message(FATAL_ERROR "miniapp/guide.md: no `git clone --depth 1 https://github.com/...` line")
+    endif()
+    if(NOT msw_ver STREQUAL "999.0.0")
+        string(REGEX REPLACE "${msw_clone_re}" "git clone --depth 1 --branch v${msw_ver} \\1"
+               msw_guide "${msw_guide}")
+    endif()
+    # CONFIGURE: written only when it changed, with the source's LF line ends
+    # (file(WRITE) gives CRLF on Windows). guide.md has no @ signs for @ONLY.
+    file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/guide.md" CONTENT "${msw_guide}"
+         @ONLY NEWLINE_STYLE UNIX)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                 "${CMAKE_CURRENT_LIST_DIR}/guide.md" "${CMAKE_SOURCE_DIR}/version.txt")
+    set(embed "${CMAKE_CURRENT_BINARY_DIR}/guide.md" "avatar_guide.md" "include/msw_app.h")
 endif()
 
 idf_component_register(

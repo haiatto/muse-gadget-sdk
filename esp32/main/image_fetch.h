@@ -92,6 +92,13 @@ typedef void (*image_fetch_stream_cb)(size_t total, const char *code, const char
 bool image_fetch_vm_stream(const char *path, size_t max, image_fetch_sink_cb sink,
                            image_fetch_stream_cb done, void *user, const char **code,
                            const char **message);
+// The same, and size runs once before the first part with the file's size
+// (0 if the VM did not say it). It returns 0 to go on, -1 to stop (2026-11-13:
+// app.install makes room for the whole package first, not after it overflows).
+typedef int (*image_fetch_size_cb)(size_t size, void *user);
+bool image_fetch_vm_stream_sized(const char *path, size_t max, image_fetch_sink_cb sink,
+                                 image_fetch_size_cb size, image_fetch_stream_cb done,
+                                 void *user, const char **code, const char **message);
 
 // For a board that draws on the same screen: image_fetch_claim() takes the
 // one-download slot, so no download starts until image_fetch_release(); false
