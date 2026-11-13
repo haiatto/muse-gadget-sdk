@@ -344,7 +344,7 @@ static void *elf_rd_part(elf_rd_t *rd, size_t off, size_t len)
  * need msw_i2c_begin first. */
 static bool is_port_fn(const char *name)
 {
-    static const char *const fns[] = { "msw_port_power", "msw_i2c_begin", "msw_pin_read" };
+    static const char *const fns[] = { "msw_port_power", "msw_i2c_begin", "msw_pin_read", "msw_uart_begin" };
     for (size_t i = 0; i < sizeof(fns) / sizeof(fns[0]); i++) {
         if (!strcmp(name, fns[i])) {
             return true;

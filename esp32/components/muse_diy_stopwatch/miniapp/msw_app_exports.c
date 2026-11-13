@@ -315,6 +315,8 @@ extern void msw_i2c_scan(void);
 extern void msw_i2c_write(void);
 extern void msw_i2c_write_read(void);
 extern void msw_imu(void);
+extern void msw_jpeg_decode(void);
+extern void msw_jpeg_size(void);
 extern void msw_log(void);
 extern void msw_menu_own(void);
 extern void msw_mic_level(void);
@@ -323,6 +325,13 @@ extern void msw_mic_read(void);
 extern void msw_millis(void);
 extern void msw_muse_online(void);
 extern void msw_muse_talk(void);
+extern void msw_nn_avg_pool(void);
+extern void msw_nn_conv(void);
+extern void msw_nn_conv_scratch(void);
+extern void msw_nn_dwconv(void);
+extern void msw_nn_dwconv_scratch(void);
+extern void msw_nn_fc(void);
+extern void msw_nn_max_pool(void);
 extern void msw_on_button(void);
 extern void msw_on_exit(void);
 extern void msw_on_muse_reply(void);
@@ -349,6 +358,11 @@ extern void msw_store_put(void);
 extern void msw_text_width(void);
 extern void msw_time(void);
 extern void msw_touch(void);
+extern void msw_uart_available(void);
+extern void msw_uart_begin(void);
+extern void msw_uart_end(void);
+extern void msw_uart_read(void);
+extern void msw_uart_write(void);
 extern void msw_vibrate(void);
 extern void pow(void);
 extern void powf(void);
@@ -413,6 +427,8 @@ const struct esp_elfsym msw_app_symbols[] = {
     { "msw_gfx_circle", (void *)&msw_gfx_circle },
     { "msw_gfx_fill_circle", (void *)&msw_gfx_fill_circle },
     { "msw_gfx_blit", (void *)&msw_gfx_blit },
+    { "msw_jpeg_size", (void *)&msw_jpeg_size },
+    { "msw_jpeg_decode", (void *)&msw_jpeg_decode },
     { "msw_gfx_text", (void *)&msw_gfx_text },
     { "msw_text_width", (void *)&msw_text_width },
     { "msw_sprite_from_art", (void *)&msw_sprite_from_art },
@@ -441,6 +457,18 @@ const struct esp_elfsym msw_app_symbols[] = {
     { "msw_i2c_read", (void *)&msw_i2c_read },
     { "msw_i2c_write_read", (void *)&msw_i2c_write_read },
     { "msw_pin_read", (void *)&msw_pin_read },
+    { "msw_uart_begin", (void *)&msw_uart_begin },
+    { "msw_uart_available", (void *)&msw_uart_available },
+    { "msw_uart_read", (void *)&msw_uart_read },
+    { "msw_uart_write", (void *)&msw_uart_write },
+    { "msw_uart_end", (void *)&msw_uart_end },
+    { "msw_nn_conv_scratch", (void *)&msw_nn_conv_scratch },
+    { "msw_nn_conv", (void *)&msw_nn_conv },
+    { "msw_nn_dwconv_scratch", (void *)&msw_nn_dwconv_scratch },
+    { "msw_nn_dwconv", (void *)&msw_nn_dwconv },
+    { "msw_nn_fc", (void *)&msw_nn_fc },
+    { "msw_nn_max_pool", (void *)&msw_nn_max_pool },
+    { "msw_nn_avg_pool", (void *)&msw_nn_avg_pool },
     { "msw_store_put", (void *)&msw_store_put },
     { "msw_store_get", (void *)&msw_store_get },
     { "msw_app_data", (void *)&msw_app_data },
@@ -769,4 +797,4 @@ const struct esp_elfsym msw_app_symbols[] = {
     { "lv_timer_resume", (void *)&lv_timer_resume },
     ESP_ELFSYM_END
 };
-const int msw_app_symbol_count = 380;
+const int msw_app_symbol_count = 394;

@@ -62,7 +62,7 @@ Museストップウォッチのつくり: 466 x 466 の丸いタッチ画面（�
 ```
 id: a-z 0-9 _（23 文字まで）。name: 31 バイトまで（日本語は 1 文字 3 バイト）。
 icon: 文字で描く絵で 32 x 32 まで、'.' は透明。16 x 16 以下なら 2 倍の大きさで描く。
-port: PORT.A を使うアプリ（msw_port_power・msw_i2c_begin・msw_pin_read を呼ぶ）だけ必要。ユーザー向けの文で、
+port: PORT.A を使うアプリ（msw_port_power・msw_i2c_begin・msw_pin_read・msw_uart_begin を呼ぶ）だけ必要。ユーザー向けの文で、
 `connect` に PORT.A につなぐもの（1 行、120 バイトまで）、`about` にそれでアプリがすること（240 バイトまで）。
 例 `"port": {"connect": "M5Stack の Dual Button ユニット", "about": "2つのボタンで、画面のキャラを左右に動かします"}`。
 ないと `sdk/build.py` が止まる。アプリが始まる前に、画面いっぱいに両方が出る。
@@ -111,6 +111,9 @@ API の全部は `app.api`（msw_app.h）で読める。要約:
 - **フレーム描画**（ゲーム向け）: msw_fb、msw_fb_present、msw_fb_present_rect、
   msw_gfx_fill / pixel / rect / fill_rect / line / circle / fill_circle /
   blit / text、msw_text_width、msw_gfx_new（画面外のバッファ）、MSW_RGB
+- **JPEG**: msw_jpeg_size(jpg, len, &w, &h)、msw_jpeg_decode(jpg, len, gfx, x, y, shrink)。
+  gfx の (x, y) に絵を描く（はみ出しは切る）。shrink 0 そのまま、1 半分、2 1/4、3 1/8（小さいほど速い）。
+  ベースラインだけ（プログレッシブは不可）。ROM のデコーダーで速くはないので、新しい絵のときだけ戻す。
 - **スプライト**: msw_sprite_from_art(rows, n, palette) — アイコンと同じ文字の絵。
   msw_sprite_draw(fb, s, x, y, 倍率 1..8, MSW_FLIP_X/Y)
 - **lvgl 描画**（メニュー、道具向け）: msw_screen() と、SDK の一覧にある lvgl の
@@ -140,6 +143,12 @@ API の全部は `app.api`（msw_app.h）で読める。要約:
        値が変わるたびに msw_log に出し、ユーザーに操作してもらって `app.log` で確かめてから決める。
     3. 何もしていないのに値が変わらないとき（0 のまま、1 のまま）は、5V が入っているか、PORT.A につないだか、
        読んでいる線（黄か白か）が合っているかを見る。
+  - シリアル（UART）で話すユニット（カメラ、GPS、ほかのマイコンなど）は msw_uart_begin(速さ, 受ける線)。
+    受ける線は MSW_PIN_YELLOW か MSW_PIN_WHITE で、もう一方で送る。8N1、1200〜5000000 bps。5V も入れる
+    （I2C と msw_pin_read は閉じる）。msw_uart_read(buf, max) は届いた分を待たずに返す。msw_uart_write、
+    msw_uart_available、msw_uart_end。ファームが 64 KB までためておくので、ティックごとに読めば足りる
+    （遅いと新しい分からなくなり、終わったときに app.log に何バイトかが出る）。どちらの線で受けるか・速さ・
+    データの形はユニットの資料で調べる。分からなければ、届いたバイトを msw_log に出して確かめる。
   - PORT.A を使うアプリは、始まる前に画面へ app.json の `port`（つなぐもの、すること）と「はじめる」「やめる」が出て、
     ユーザーが青ボタンを押しながら「はじめる」をタッチしてから app_main が呼ばれる。`app.run` はすぐ返るので、
     ユーザーに、青ボタンを押しながら「はじめる」をタッチしてもらうよう伝える。押されるまで、この関数はどれも失敗する。
@@ -149,6 +158,12 @@ API の全部は `app.api`（msw_app.h）で読める。要約:
 - **データファイル**: `msw_app_data("level1.bin", &size)` — フォルダの `data/` に置いたファイルを、
   フラッシュに置かれたまま読む（読むだけ）。RAM を使わないので、MB 単位のデータでもよい。
   名前は 47 バイトまで。ないと NULL（app.log に 1 行出る）。読む速さは約 16 MB/秒。
+- **ニューラルネットの層**（int8）: msw_nn_conv、msw_nn_dwconv（depthwise）、msw_nn_fc、msw_nn_max_pool、
+  msw_nn_avg_pool。ファームにある esp-nn（ESP32-S3 の SIMD 命令を使う）を呼ぶ。小さな int8 のモデル
+  （TensorFlow Lite の int8 量子化と同じ数の形）の重い層をこれで回し、層の順番と軽い処理（足し算、
+  シグモイド、形の並べ替え）はアプリが C で書く。重みは `data/` に置いて msw_app_data で読む。
+  NHWC（チャンネルが最後）。conv と dwconv は msw_nn_conv_scratch などで作業用の大きさを聞き、その大きさを
+  malloc して渡す。モデルを読み込んで丸ごと動かす仕組み（TensorFlow Lite Micro など）はない。
 - **Muse**: msw_muse_online、msw_avatar_show/hide、msw_bubble、
   msw_on_muse_reply、msw_muse_talk(down) — アプリに Muse を出したいときだけ使う。
   Muse を使うかはアプリが決める。アプリ中、青ボタンはアプリのもので「話す」ではない。

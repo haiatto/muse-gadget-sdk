@@ -193,6 +193,10 @@ void msw_port_allow(bool on);               /* msw_app_port.c: the user picked "
 void msw_port_app_end(void);                /* msw_app_port.c: PORT.A off with the app */                 /* msw_app_mic.c: the mic goes off with the app */
 void msw_sound_app(bool running);            /* keeps the speaker open while an app runs */
 
+/* ---- network layers (msw_app_nn.c) ---- */
+void msw_nn_lock(void);                      /* one esp-nn layer at a time (msw_wake.cc too) */
+void msw_nn_unlock(void);
+
 /* ---- Muse overlay (msw_app_api.c) ---- */
 void msw_overlay_draw(uint16_t *row_px, int y, int x1, int x2);   /* frame mode, per row */
 bool msw_overlay_active(void);

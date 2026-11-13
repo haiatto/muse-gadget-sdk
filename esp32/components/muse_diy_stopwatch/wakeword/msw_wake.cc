@@ -67,6 +67,10 @@ extern const uint8_t vad_end[] asm("_binary_vad_tflite_end");
 void msw_console_add(bool (*fn)(const char *line));
 void msw_board_vibrate(int pct) __attribute__((weak));
 bool msw_mic_wanted(void) __attribute__((weak));   /* a mini app has the mic */
+/* miniapp/msw_app_nn.c: mini apps run esp-nn layers too, and esp-nn keeps one
+ * scratch pointer per kind of layer; one at a time (2026-11-14). */
+void msw_nn_lock(void) __attribute__((weak));
+void msw_nn_unlock(void) __attribute__((weak));
 /* muse (muse_state.h, muse_menu.h, muse_input.h have no C++ guards) */
 bool muse_state_asleep(void);
 bool muse_state_on_battery(void);
@@ -192,7 +196,14 @@ static int feed_model(Model &m, const int8_t *feat, bool hold_off)
     }
     m.step = 0;
     int64_t t0 = esp_timer_get_time();
-    if (m.it->Invoke() != kTfLiteOk) {
+    if (msw_nn_lock) {
+        msw_nn_lock();
+    }
+    TfLiteStatus st = m.it->Invoke();
+    if (msw_nn_unlock) {
+        msw_nn_unlock();
+    }
+    if (st != kTfLiteOk) {
         return -1;
     }
     int64_t us = esp_timer_get_time() - t0;

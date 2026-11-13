@@ -17,9 +17,14 @@
 
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
+#include "driver/uart.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "msw_app_priv.h"
+#include "msw_stack.h"
 #include "msw_time.h"
 #include "muse_state.h"
 
@@ -38,6 +43,20 @@ static bool s_pin_in[2];        /* MSW_PIN_YELLOW, MSW_PIN_WHITE made inputs */
 static const int s_pin_gpio[2] = { PORT_SDA, PORT_SCL };
 static i2c_master_bus_handle_t s_bus;
 static int s_khz;
+
+/* UART on PORT.A (msw_uart_begin). UART0 is the console; UART1 is the apps'.
+ * The driver's small receive ring is internal RAM (its interrupt fills it);
+ * a task moves the bytes on into a larger ring in PSRAM, so an app that reads
+ * once a tick (30 a second) loses nothing at camera speeds (1.5 Mbit/s is
+ * about 150 KB a second, 5 KB a tick). */
+#define APP_UART UART_NUM_1
+#define UART_DRV_RX 2048            /* internal: the driver's ring */
+#define UART_RING (64 * 1024)       /* PSRAM: what the app reads from */
+static uint8_t *s_ring;
+static volatile uint32_t s_ring_head, s_ring_tail;   /* written by the task / by the app */
+static volatile uint32_t s_ring_lost;
+static volatile bool s_uart_on;
+static TaskHandle_t s_uart_task;
 static struct {
     int addr;
     i2c_master_dev_handle_t dev;
@@ -133,6 +152,10 @@ bool msw_i2c_begin(int khz)
     if (s_bus && khz == s_khz) {
         return true;
     }
+    if (s_uart_on) {
+        msw_uart_end();
+        msw_app_logf("PORT.A UART ended: msw_i2c_begin takes the pins");
+    }
     msw_i2c_end();
     i2c_master_bus_config_t cfg = {
         .i2c_port = -1,                     /* any free controller */
@@ -166,6 +189,10 @@ int msw_pin_read(int pin)
         if (s_bus) {
             msw_i2c_end();
             msw_app_logf("PORT.A I2C ended: msw_pin_read takes the pins");
+        }
+        if (s_uart_on) {
+            msw_uart_end();
+            msw_app_logf("PORT.A UART ended: msw_pin_read takes the pins");
         }
         gpio_config_t io = {
             .pin_bit_mask = 1ULL << s_pin_gpio[pin],
@@ -251,9 +278,148 @@ bool msw_i2c_write_read(int addr, const void *out, int n_out, void *in, int n_in
     return d && i2c_master_transmit_receive(d, out, (size_t)n_out, in, (size_t)n_in, I2C_TIMEOUT_MS) == ESP_OK;
 }
 
+/* ---- UART ---------------------------------------------------------------- */
+
+static void uart_task(void *arg)
+{
+    (void)arg;
+    uint8_t buf[512];
+    while (s_uart_on) {
+        int n = uart_read_bytes(APP_UART, buf, sizeof(buf), pdMS_TO_TICKS(20));
+        if (n <= 0) {
+            continue;
+        }
+        uint32_t head = s_ring_head;
+        uint32_t room = UART_RING - (head - __atomic_load_n(&s_ring_tail, __ATOMIC_ACQUIRE));
+        uint32_t take = (uint32_t)n < room ? (uint32_t)n : room;
+        for (uint32_t i = 0; i < take; i++) {
+            s_ring[(head + i) % UART_RING] = buf[i];
+        }
+        __atomic_store_n(&s_ring_head, head + take, __ATOMIC_RELEASE);
+        s_ring_lost += (uint32_t)n - take;
+    }
+    s_uart_task = NULL;
+    msw_task_delete_self();
+}
+
+void msw_uart_end(void)
+{
+    if (!s_uart_on) {
+        return;
+    }
+    s_uart_on = false;
+    for (int i = 0; i < 50 && s_uart_task; i++) {   /* it sees the flag within one read */
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    uart_driver_delete(APP_UART);
+    gpio_reset_pin(PORT_SDA);
+    gpio_reset_pin(PORT_SCL);
+    if (s_ring_lost) {
+        msw_app_logf("PORT.A UART: %u bytes lost (the app read too slowly)", (unsigned)s_ring_lost);
+    }
+    heap_caps_free(s_ring);
+    s_ring = NULL;
+}
+
+bool msw_uart_begin(int baud, int rx_pin)
+{
+    if (!allowed("msw_uart_begin")) {
+        return false;
+    }
+    if (baud < 1200 || baud > 5000000 || (rx_pin != MSW_PIN_YELLOW && rx_pin != MSW_PIN_WHITE)) {
+        msw_app_logf("msw_uart_begin(%d, %d): baud 1200..5000000, rx_pin MSW_PIN_YELLOW or MSW_PIN_WHITE",
+                     baud, rx_pin);
+        return false;
+    }
+    msw_uart_end();
+    msw_i2c_end();
+    for (int i = 0; i < 2; i++) {
+        if (s_pin_in[i]) {
+            gpio_reset_pin(s_pin_gpio[i]);
+            s_pin_in[i] = false;
+        }
+    }
+    if (!msw_port_power(true)) {
+        return false;
+    }
+    s_ring = heap_caps_malloc(UART_RING, MALLOC_CAP_SPIRAM);
+    if (!s_ring) {
+        return false;
+    }
+    s_ring_head = s_ring_tail = s_ring_lost = 0;
+    const uart_config_t cfg = {
+        .baud_rate = baud,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_DEFAULT,
+    };
+    int rx = s_pin_gpio[rx_pin], tx = s_pin_gpio[1 - rx_pin];
+    esp_err_t err = uart_driver_install(APP_UART, UART_DRV_RX, 0, 0, NULL, 0);
+    if (err == ESP_OK) {
+        err = uart_param_config(APP_UART, &cfg);
+    }
+    if (err == ESP_OK) {
+        err = uart_set_pin(APP_UART, tx, rx, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    }
+    if (err == ESP_OK) {
+        s_uart_on = true;
+        if (msw_task_create(uart_task, "msw_uart", 3072, NULL, 5, &s_uart_task) != pdPASS) {
+            s_uart_on = false;
+            err = ESP_ERR_NO_MEM;
+        }
+    }
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "PORT.A UART: %s", esp_err_to_name(err));
+        uart_driver_delete(APP_UART);
+        heap_caps_free(s_ring);
+        s_ring = NULL;
+        return false;
+    }
+    msw_app_logf("PORT.A UART %d baud, rx %s, tx %s", baud, rx_pin == MSW_PIN_YELLOW ? "yellow" : "white",
+                 rx_pin == MSW_PIN_YELLOW ? "white" : "yellow");
+    return true;
+}
+
+int msw_uart_available(void)
+{
+    if (!s_uart_on) {
+        return -1;
+    }
+    return (int)(__atomic_load_n(&s_ring_head, __ATOMIC_ACQUIRE) - s_ring_tail);
+}
+
+int msw_uart_read(void *data, int max)
+{
+    data = max > 0 ? msw_api_writable(data, (size_t)max, "msw_uart_read") : NULL;
+    if (!s_uart_on || !data) {
+        return -1;
+    }
+    uint32_t tail = s_ring_tail;
+    uint32_t have = __atomic_load_n(&s_ring_head, __ATOMIC_ACQUIRE) - tail;
+    uint32_t n = have < (uint32_t)max ? have : (uint32_t)max;
+    uint32_t at = tail % UART_RING;
+    uint32_t first = n < UART_RING - at ? n : UART_RING - at;
+    memcpy(data, s_ring + at, first);
+    memcpy((uint8_t *)data + first, s_ring, n - first);
+    __atomic_store_n(&s_ring_tail, tail + n, __ATOMIC_RELEASE);
+    return (int)n;
+}
+
+int msw_uart_write(const void *data, int n)
+{
+    data = n > 0 ? msw_api_readable(data, (size_t)n, "msw_uart_write") : NULL;
+    if (!s_uart_on || !data) {
+        return -1;
+    }
+    return uart_write_bytes(APP_UART, data, (size_t)n);
+}
+
 /* msw_app_core.c: an app ended. */
 void msw_port_app_end(void)
 {
+    msw_uart_end();
     msw_i2c_end();
     for (int i = 0; i < 2; i++) {
         if (s_pin_in[i]) {

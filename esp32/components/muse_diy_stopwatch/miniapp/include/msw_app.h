@@ -52,7 +52,8 @@ typedef struct _lv_font_t lv_font_t;
 extern "C" {
 #endif
 
-#define MSW_API_VERSION 3   /* 2: msw_app_data (2026-11-11); 3: msw_pin_read, the PORT.A start screen (2026-11-13) */
+#define MSW_API_VERSION 4   /* 2: msw_app_data (2026-11-11); 3: msw_pin_read, the PORT.A start screen (2026-11-13);
+                               4: msw_uart_*, msw_jpeg_*, msw_nn_* (2026-11-14) */
 #define MSW_SCREEN_W 466
 #define MSW_SCREEN_H 466
 
@@ -129,6 +130,16 @@ void msw_gfx_circle(msw_gfx_t *g, int cx, int cy, int r, uint16_t color);       
 void msw_gfx_fill_circle(msw_gfx_t *g, int cx, int cy, int r, uint16_t color);
 /* Copies src onto g at (x, y), each pixel `scale` times (1..8). */
 void msw_gfx_blit(msw_gfx_t *g, int x, int y, const msw_gfx_t *src, int scale);
+
+/* JPEG pictures (baseline; not progressive), for example frames from a
+ * camera on PORT.A or a file in data/. msw_jpeg_size reads the width and
+ * height. msw_jpeg_decode draws the whole picture onto g with its top left at
+ * (x, y), clipped to g. shrink makes it smaller while decoding, which is also
+ * faster: 0 whole, 1 half, 2 a quarter, 3 an eighth (sizes round up). Both
+ * return false for data that is not a JPEG they can read. Decoding takes
+ * time (the ROM's TJpgDec, no SIMD): once per new picture, not every tick. */
+bool msw_jpeg_size(const void *jpg, int len, int *w, int *h);
+bool msw_jpeg_decode(const void *jpg, int len, msw_gfx_t *g, int x, int y, int shrink);
 
 /* Text with the firmware's fonts. size: 14, 16, 20 or 28 (Latin), or 0 for
  * the 16 px Japanese font (kana and kanji). Returns the width drawn. */
@@ -274,6 +285,90 @@ bool msw_i2c_write_read(int addr, const void *out, int n_out, void *in, int n_in
 #define MSW_PIN_YELLOW 0   /* G10 (SDA) */
 #define MSW_PIN_WHITE 1    /* G11 (SCL) */
 int msw_pin_read(int pin);
+
+/* PORT.A as a UART, 8 data bits, no parity, 1 stop bit (8N1), for units
+ * that talk over a serial line (cameras, GPS, other boards). rx_pin is the
+ * line the StopWatch receives on (MSW_PIN_YELLOW or MSW_PIN_WHITE); it sends
+ * on the other. Which line is which depends on the unit: its pin map, or try
+ * both. baud: 1200 to 5000000. It turns the 5V pin on and ends the I2C bus
+ * and msw_pin_read (they take the pins back).
+ *
+ * The firmware keeps receiving into a 64 KB buffer while the app runs, so
+ * reading once a tick is enough even at 1.5 Mbit/s. If the app reads too
+ * slowly, the newest bytes are lost and app.log says how many at the end. */
+bool msw_uart_begin(int baud, int rx_pin);
+int msw_uart_available(void);                    /* bytes waiting; -1 not open */
+int msw_uart_read(void *data, int max);          /* up to max bytes, never waits; -1 not open */
+int msw_uart_write(const void *data, int n);     /* bytes sent; -1 not open */
+void msw_uart_end(void);
+
+/* ---- neural network layers (int8) ---------------------------------------- */
+
+/* The firmware's esp-nn kernels (Espressif), which use the ESP32-S3's SIMD
+ * instructions: the heavy layers of a small int8 network (a TensorFlow Lite
+ * model quantized to int8 uses the same numbers). The app holds the weights
+ * (in data/, msw_app_data) and runs the layers in order itself; the light
+ * ones (add, sigmoid, reshaping) it can write in C.
+ *
+ * Tensors are int8, NHWC (channels last). Offsets are the zero points:
+ * in_offset is minus the input's zero point, out_offset the output's.
+ * quant has one shift and one multiplier per output channel (TFLite's
+ * per-channel requantization). activation is the output's clamp
+ * (-128..127 for none). The functions return false for a bad pointer or
+ * size. One layer runs at a time across the firmware (the wake word uses
+ * them too), so a call can wait a moment for another to finish. */
+typedef struct {
+    int32_t width, height, channels;
+    int32_t extra;                   /* 1 (batch); for a filter: its output channels */
+} msw_nn_dims_t;
+
+typedef struct {
+    int32_t in_offset, out_offset;
+    int32_t stride_w, stride_h;
+    int32_t pad_w, pad_h;
+    int32_t dilation_w, dilation_h;
+    int32_t act_min, act_max;
+} msw_nn_conv_t;
+
+typedef struct {
+    int32_t in_offset, out_offset;
+    int32_t ch_mult;                 /* output channels = input channels * ch_mult */
+    int32_t stride_w, stride_h;
+    int32_t pad_w, pad_h;
+    int32_t dilation_w, dilation_h;
+    int32_t act_min, act_max;
+} msw_nn_dwconv_t;
+
+typedef struct {
+    int32_t *shift;                  /* one per output channel */
+    int32_t *mult;
+} msw_nn_quant_t;
+
+/* 2D convolution. filter: NHWC as [out_ch][h][w][in_ch]; bias: int32 per
+ * output channel (or NULL). scratch: a buffer of msw_nn_conv_scratch bytes,
+ * 16-byte aligned (malloc gives that), or NULL when it is 0. */
+int msw_nn_conv_scratch(const msw_nn_dims_t *in, const msw_nn_dims_t *filter, const msw_nn_dims_t *out,
+                        const msw_nn_conv_t *p);
+bool msw_nn_conv(const msw_nn_dims_t *in, const int8_t *in_data, const msw_nn_dims_t *filter,
+                 const int8_t *filter_data, const int32_t *bias, const msw_nn_dims_t *out, int8_t *out_data,
+                 const msw_nn_conv_t *p, const msw_nn_quant_t *quant, void *scratch);
+/* Depthwise convolution: filter [1][h][w][out_ch]. */
+int msw_nn_dwconv_scratch(const msw_nn_dims_t *in, const msw_nn_dims_t *filter, const msw_nn_dims_t *out,
+                          const msw_nn_dwconv_t *p);
+bool msw_nn_dwconv(const msw_nn_dims_t *in, const int8_t *in_data, const msw_nn_dims_t *filter,
+                   const int8_t *filter_data, const int32_t *bias, const msw_nn_dims_t *out, int8_t *out_data,
+                   const msw_nn_dwconv_t *p, const msw_nn_quant_t *quant, void *scratch);
+/* Fully connected: out[o] from in[0..row_len) and filter row o; per-channel quant. */
+bool msw_nn_fc(const int8_t *in, int32_t in_offset, int row_len, const int8_t *filter, const int32_t *bias,
+               int8_t *out, int out_channels, int32_t out_offset, const msw_nn_quant_t *quant,
+               int32_t act_min, int32_t act_max);
+/* Pooling over one HWC map (same size rules as TFLite's). */
+bool msw_nn_max_pool(const int8_t *in, int in_w, int in_h, int8_t *out, int out_w, int out_h, int stride_w,
+                     int stride_h, int filter_w, int filter_h, int pad_w, int pad_h, int act_min, int act_max,
+                     int channels);
+bool msw_nn_avg_pool(const int8_t *in, int in_w, int in_h, int8_t *out, int out_w, int out_h, int stride_w,
+                     int stride_h, int filter_w, int filter_h, int pad_w, int pad_h, int act_min, int act_max,
+                     int channels);
 
 /* ---- storage ------------------------------------------------------------- */
 

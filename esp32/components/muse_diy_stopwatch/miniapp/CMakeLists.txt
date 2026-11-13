@@ -9,7 +9,7 @@ if(CONFIG_MUSE_BOARD_M5STACK_STOPWATCH)
     set(srcs "msw_app_core.c" "msw_app_api.c" "msw_app_gfx.c" "msw_app_sound.c"
              "msw_app_launcher.c" "msw_app_cmd.c" "msw_app_menu.c" "msw_app_exports.c"
              "msw_app_crash.c" "msw_app_shot.c" "msw_avatar.c" "msw_app_mic.c" "msw_app_port.c"
-             "msw_app_pkgs.c")
+             "msw_app_pkgs.c" "msw_app_nn.c" "msw_app_jpeg.c")
     # The guide tells Muse which SDK to clone. A release firmware (version.txt
     # not 999.0.0) points it at the tag of its own version, v<version>, so its
     # SDK stays the one it was built with; a development build keeps main
@@ -37,7 +37,7 @@ idf_component_register(
     SRCS ${srcs}
     INCLUDE_DIRS "include"
     EMBED_TXTFILES ${embed}
-    PRIV_REQUIRES muse ui nvs_flash esp_driver_i2c fatfs wear_levelling esp_partition esp_timer mbedtls vfs esp_hw_support esp_app_format
+    PRIV_REQUIRES muse ui nvs_flash esp_driver_i2c esp_driver_uart fatfs wear_levelling esp_partition esp_timer mbedtls vfs esp_hw_support esp_app_format
 )
 
 if(CONFIG_MUSE_BOARD_M5STACK_STOPWATCH)
