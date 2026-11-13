@@ -12,7 +12,8 @@
  * "@msw.tts done" / "@msw.say done".
  *
  * Settings (bench of 2026-11-07, work/sanotts-bench-2026-11-07.md): the model is
- * copied into PSRAM (faster than reading it from flash), the arena (inference
+ * read from flash (2026-11-12: about 20% slower than a PSRAM copy, which
+ * model=psram still makes, but 768 KB of PSRAM stays free), the arena (inference
  * work area, about 120 KB) is in PSRAM (internal RAM has no block that big), the
  * task runs on core 0 at priority 4: core 1 is where the UI draws (lvgl,
  * priority 5), and above it the UI stops.
@@ -66,7 +67,7 @@ static struct {
     int rep;
     bool quiet;   /* speech plays silence of the same length (tests at night) */
     float gain;   /* speech level: the model's output times this (msw.tts.cfg gain=) */
-} s_cfg = { false, true, 4, 0, 1, false, TTS_GAIN };
+} s_cfg = { false, false, 4, 0, 1, false, TTS_GAIN };   /* model from flash (2026-11-12, user decision) */
 
 static const void *s_model_map, *s_dict_map;
 static size_t s_model_n, s_dict_n;
@@ -955,6 +956,10 @@ __attribute__((constructor)) static void msw_tts_register(void)
     work_t w = { 0 };
     work_alloc(&w);   /* PSRAM is still in one piece: keep the work area (s_keep) */
     work_free(&w);
+    /* The ring and the filter too (2026-11-12, user decision): TTS holds all
+     * it needs from start-up, so what the apps see free stays free. The model
+     * and the dictionary are read from flash and take no PSRAM. */
+    rs_init();
 }
 
 bool msw_tts_console(const char *line)

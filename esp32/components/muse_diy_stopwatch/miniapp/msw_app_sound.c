@@ -136,13 +136,23 @@ static void mix(int16_t *buf, size_t n)
 
 /* ---- the wrapping player ----------------------------------------------------- */
 
+/* museStopWatch: sound.play (main/msw_play.c) is mixed in at the speaker; while
+ * it plays, the idle player feeds the speaker silence for it to go over. */
+bool msw_play_sound_active(void) __attribute__((weak));
+void msw_play_stop(void) __attribute__((weak));
+
+static bool sound_play(void)
+{
+    return msw_play_sound_active && msw_play_sound_active();
+}
+
 static bool w_ready(void)
 {
     if (s_prev && s_prev->ready()) {
         atomic_store(&s_prev_active, true);
         return true;
     }
-    return synth_wanted();
+    return synth_wanted() || sound_play();
 }
 
 static size_t w_read(int16_t *mono, size_t max)
@@ -158,7 +168,7 @@ static size_t w_read(int16_t *mono, size_t max)
         }
     }
     if (n == 0) {
-        if (!synth_wanted()) {
+        if (!synth_wanted() && !sound_play()) {
             return 0;
         }
         memset(mono, 0, max * sizeof(*mono));
@@ -172,7 +182,7 @@ static size_t w_read(int16_t *mono, size_t max)
 
 static bool w_done(void)
 {
-    return !atomic_load(&s_prev_active) && !synth_wanted();
+    return !atomic_load(&s_prev_active) && !synth_wanted() && !sound_play();
 }
 
 static void w_stop(void)
@@ -183,6 +193,9 @@ static void w_stop(void)
     atomic_store(&s_prev_active, false);
     msw_sound_stop(-1);
     s_last_sound = 0;
+    if (msw_play_stop) {
+        msw_play_stop();   /* a press stops sound.play too */
+    }
 }
 
 static const muse_voice_player_t s_player = { w_ready, w_read, w_done, w_stop };

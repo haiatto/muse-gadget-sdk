@@ -1437,7 +1437,7 @@ static char *build_register_json(void) {
         /* museStopWatch: the version in the description tells Muse when to read it again. */
         char doc_desc[640];
         snprintf(doc_desc, sizeof(doc_desc),
-                 "Museストップウォッチ 総合ガイド（版 %s）。本体のこと、ボタン、返事の字幕と読み上げ、"
+                 "Museストップウォッチ 総合ガイド（版 %s）。Museストップウォッチのこと、ボタン、返事の字幕と読み上げ、"
                  "各ツールの詳しい使い方と組み合わせ方、ユーザーへの案内、注意をまとめた日本語の"
                  "Markdown（content）を返します。この版をまだ読んでいなければ、会話の最初に1回呼んで"
                  "ください。同じ版を読んだことがあれば呼ばなくてよい。引数なし。",
@@ -1449,15 +1449,15 @@ static char *build_register_json(void) {
             "会話そのものの ID（UUID、8-4-4-4-12、大文字小文字どちらでも）。エージェントのセッション ID ではない。"));
         cJSON *side_opt = cJSON_CreateObject();
         cJSON_AddItemToObject(side_opt, "name", string_param(
-            "本体に出す短い名前（23 バイトまで。日本語なら 7 文字）。"
+            "Museストップウォッチに出す短い名前（23 バイトまで。日本語なら 7 文字）。"
             "すでに一覧にあれば名前を変える。"));
         add_command(commands, "side.add",
-                    "会話をサイドチャットの一覧（本体の 設定 > Muse > Side chat）に足す。"
+                    "会話をサイドチャットの一覧（Museストップウォッチの 設定 > Muse > Side chat）に足す。"
                     "すでにあれば足さない（added: false）。話す先は切り替えない。"
-                    "切り替えはユーザーが本体で行う。8 個まで。",
+                    "切り替えはユーザーがMuseストップウォッチで行う。8 個まで。",
                     side_req, side_opt);
         add_command(commands, "side.list",
-                    "本体にあるサイドチャットの一覧（id、name）と、今話している先"
+                    "Museストップウォッチにあるサイドチャットの一覧（id、name）と、今話している先"
                     "（current: その id。メインの会話なら \"main\"）。",
                     nullptr, nullptr);
     }
@@ -1599,31 +1599,33 @@ static char *build_register_json(void) {
                 "reports the current one.",
                 nullptr, volume_optional);
 #endif
-    if (msw_tts_say) {
-        cJSON *say_required = cJSON_CreateObject();
-        cJSON_AddItemToObject(say_required, "text", string_param(
-            "Japanese text to read aloud (UTF-8): kanji, kana and punctuation. "
-            "Long text is fine; it is read sentence by sentence."));
-        add_command(commands, "voice.say",
-                    "Read Japanese text aloud on the device's own speaker with its "
-                    "built-in voice (sanoTTS-jp, runs on the device, no network). "
-                    "Your replies to a voice message are already read aloud with "
-                    "this voice, so you don't need this to answer. Use it to say "
-                    "something other than your written reply (for example a "
-                    "shorter spoken version, or kana readings): when you call it "
-                    "during a voice turn, it is spoken in place of your reply, "
-                    "and the reply is only shown. "
-                    "Returns at once; speech starts within about half a second. "
-                    "A button press or voice.stop stops it. Japanese only: Latin "
-                    "letters and symbols may be read oddly or skipped, and rare "
-                    "words or names may be misread, so write those in kana "
-                    "(hiragana or katakana). Errors: speaker_off (the user turned "
-                    "the speaker off: show text instead), busy (already speaking), "
-                    "empty, out_of_memory.",
-                    say_required, nullptr);
-        add_command(commands, "voice.stop",
-                    "Stop what voice.say is reading.", nullptr, nullptr);
+    /* museStopWatch: voice.say / voice.stop are not offered (2026-11-13, user decision). */
+    /* museStopWatch: voice.play / sound.play (msw_play.c, 2026-11-13). path is
+     * optional: stop=true needs none. */
+#if CONFIG_HOMEHUB_DISPLAY_COMMANDS
+    {
+        cJSON *stop = cJSON_CreateObject();
+        cJSON_AddStringToObject(stop, "type", "boolean");
+        cJSON_AddStringToObject(stop, "description", "Stop what plays (no path needed).");
+        cJSON *vo = cJSON_CreateObject();
+        cJSON_AddItemToObject(vo, "path", string_param("MP3 or HLS index.m3u8 on this VM, e.g. workspace/tts/index.m3u8."));
+        cJSON_AddItemToObject(vo, "cv", string_param("The voice's name, shown as CV: <name>."));
+        cJSON_AddItemToObject(vo, "stop", cJSON_Duplicate(stop, true));
+        add_command(commands, "voice.play",
+                    "【重要】音声は、チャットの返答と全く同じ文面にしてください。ユーザーが声（キャラクターの声など）での返事をはっきり頼んだときだけ使います。ユーザーがMuseストップウォッチで話している最中（声への返事を待っている間）に、あなたが返事と全く同じ文を TTS で MP3 にして渡します。Museストップウォッチはそのターンの返事を sanoTTS-jp で読まず、この音声を返事の字幕に合わせて流します。返事の文はいつもどおり書いてください（字幕になります）。path は VM のファイル（display.draw_file と同じ相対パス、例 workspace/tts/reply.mp3）。短い返事は1本の MP3 で。長い返事はストリーミング（HLS）で：返事全体を1回で TTS にかけ、出てくる MP3 のデータを約1秒分（8 KB 程度）ずつ seg000.mp3, seg001.mp3 … と同じフォルダに書き出し、書き終えたものから index.m3u8（#EXTM3U で始まる HLS の一覧）にファイル名を追記し、最後に #EXT-X-ENDLIST を書きます。区切りは MP3 フレームの途中でもかまいません。最初のファイルを一覧に載せた時点で path に index.m3u8 を渡して呼び、書き出しは呼び出しの返事を待たずに最後まで続け（または2〜3本書いてから呼び）、それから返事の文を送ってください。Museストップウォッチは一覧を約1秒ごとに読み直します。次のファイルが30秒載らないと止まります。MP3 はモノラル、22,050 Hz か 24,000 Hz（16,000 Hz も可）で、全体を同じ形式にします。cv は声の名前（例: ずんだもん）。流している間、画面に「CV: 名前」と出ます。キャラクターや声優の声を使うときは入れてください。すぐに返事をします。話している最中でなければ no_turn。stop=true で止めます。sound.play と同時には鳴らせず、後から呼んだ方に置き換わります。",
+                    nullptr, vo);
+        cJSON *so = cJSON_CreateObject();
+        cJSON_AddItemToObject(so, "path", string_param("MP3 or HLS index.m3u8 on this VM."));
+        cJSON *vol = cJSON_CreateObject();
+        cJSON_AddStringToObject(vol, "type", "integer");
+        cJSON_AddStringToObject(vol, "description", "0 to 100, default 100.");
+        cJSON_AddItemToObject(so, "volume", vol);
+        cJSON_AddItemToObject(so, "stop", stop);
+        add_command(commands, "sound.play",
+                    "音を鳴らします（アラーム音、効果音、音の遊びなど）。sanoTTS-jp の声や返事の上に重ねて鳴ります。path は VM の MP3 か HLS の index.m3u8（形式と書き方は voice.play と同じ）。volume は 0〜100（省略時 100）。すぐに返事をします。voice.play と同時には鳴らせず、後から呼んだ方に置き換わります。stop=true で止めます。ユーザーがボタンを押したときも止まります。",
+                    nullptr, so);
     }
+#endif
     if (msw_app_command) {
         cJSON *offset = cJSON_CreateObject();
         cJSON *off = cJSON_CreateObject();

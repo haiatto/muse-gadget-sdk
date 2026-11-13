@@ -1946,6 +1946,8 @@ extern const char *msw_tts_say(const char *text) __attribute__((weak));
 extern void msw_tts_stop(void) __attribute__((weak));
 /* museStopWatch: mini apps (components/muse_diy_stopwatch/miniapp); NULL when not linked in. */
 extern cJSON *msw_app_command(const char *command, const cJSON *params) __attribute__((weak));
+/* museStopWatch: voice.play / sound.play (msw_play.c). */
+extern cJSON *msw_play_command(const char *command, const cJSON *params);
 extern cJSON *msw_app_install_json(const uint8_t *data, size_t n, bool run) __attribute__((weak));
 extern void *msw_app_install_json_begin(cJSON **err) __attribute__((weak));
 extern int msw_app_install_json_write(void *ctx, const uint8_t *p, size_t n) __attribute__((weak));
@@ -2103,26 +2105,13 @@ static cJSON *on_ws_command(
         cJSON *r = msw_app_command(command, params);
         if (r) return r;
     }
-    /* museStopWatch: on-device Japanese speech (components/muse_diy_stopwatch/sanotts, msw_tts.c). */
-    if (msw_tts_say && strcmp(command, "voice.say") == 0) {
-        cJSON *text = cJSON_GetObjectItem(params, "text");
-        const char *why = msw_tts_say(cJSON_IsString(text) ? text->valuestring : NULL);
-        if (why) {
-            return command_error(why, !strcmp(why, "speaker_off") ? "the speaker is turned off on the device"
-                                      : !strcmp(why, "busy") ? "already speaking; voice.stop first"
-                                      : !strcmp(why, "empty") ? "text is required"
-                                      : "not enough memory to speak");
-        }
-        cJSON *result = cJSON_CreateObject();
-        cJSON_AddBoolToObject(result, "ok", true);
-        return result;
+    /* museStopWatch: voice.say / voice.stop were cut as tools (2026-11-13, user decision):
+     * replies are read aloud with the device voice already. Mini apps keep msw_say. */
+#if CONFIG_HOMEHUB_DISPLAY_COMMANDS
+    if (strcmp(command, "voice.play") == 0 || strcmp(command, "sound.play") == 0) {
+        return msw_play_command(command, params);
     }
-    if (msw_tts_stop && strcmp(command, "voice.stop") == 0) {
-        msw_tts_stop();
-        cJSON *result = cJSON_CreateObject();
-        cJSON_AddBoolToObject(result, "ok", true);
-        return result;
-    }
+#endif
 #if CONFIG_HOMEHUB_SENSECAP_SENSORS
     if (strcmp(command, "sensors.read") == 0) {
         return sensecap_sensors_command();

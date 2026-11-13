@@ -292,7 +292,7 @@ static void send_locked(httpd_req_t *req)
         "body{font-family:system-ui,sans-serif;background:#0f0c1d;color:#f2efff;margin:0;padding:16px;line-height:1.6}"
         "h1{font-size:1.3rem;color:#a77dff}section{background:#1a1530;border-radius:12px;padding:12px 16px}"
         "</style></head><body><h1>museStopWatch</h1><section>"
-        "設定ページを開くには、本体の <b>SETTINGS &rsaquo; QR &rsaquo; Web QR</b> に出る QR をスマホで読み取ってください。"
+        "設定ページを開くには、Museストップウォッチの <b>SETTINGS &rsaquo; QR &rsaquo; Web QR</b> に出る QR をスマホで読み取ってください。"
         "一度開いたブラウザは、次からこのアドレスだけで開けます。"
         "</section></body></html>");
 }

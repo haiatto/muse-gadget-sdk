@@ -421,6 +421,9 @@ esp_err_t muse_audio_read(int16_t *mono, size_t frames)
     return ESP_OK;
 }
 
+/* museStopWatch: sound.play's audio, added over what is played (main/msw_play.c). */
+void msw_audio_overlay(int16_t *mono, size_t n) __attribute__((weak));
+
 esp_err_t muse_audio_write(const int16_t *mono, size_t frames)
 {
     if (muse_board->mic_init) {
@@ -433,9 +436,16 @@ esp_err_t muse_audio_write(const int16_t *mono, size_t frames)
     bool mute = !muse_settings_speaker_on();
     while (frames) {
         size_t n = frames > MUSE_AUDIO_CHUNK ? MUSE_AUDIO_CHUNK : frames;
+        const int16_t *src = mono;
+        if (msw_audio_overlay) {
+            static int16_t mixed[MUSE_AUDIO_CHUNK];
+            memcpy(mixed, mono, n * sizeof(int16_t));
+            msw_audio_overlay(mixed, n);   /* also when muted: it keeps its pace */
+            src = mixed;
+        }
         for (size_t i = 0; i < n; i++) {
-            s_out_stereo[2 * i] = mute ? 0 : mono[i];
-            s_out_stereo[2 * i + 1] = mute ? 0 : mono[i];
+            s_out_stereo[2 * i] = mute ? 0 : src[i];
+            s_out_stereo[2 * i + 1] = mute ? 0 : src[i];
         }
         if (esp_codec_dev_write(s_spk, s_out_stereo, n * CHANNELS * sizeof(int16_t)) != ESP_CODEC_DEV_OK) {
             return ESP_FAIL;

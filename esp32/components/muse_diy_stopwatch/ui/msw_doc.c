@@ -85,7 +85,7 @@ static cJSON *side_add(const cJSON *params)
         return fail("bad_id", "id は UUID（8-4-4-4-12 の 16 進数）です");
     }
     if (i == MSW_SIDE_FULL) {
-        return fail("full", "サイドチャットはすでに 8 個あります。ユーザーが本体で 1 つ消せば足せます");
+        return fail("full", "サイドチャットはすでに 8 個あります。ユーザーがMuseストップウォッチの設定で 1 つ消せば足せます");
     }
     msw_side_t sc;
     if (i < 0 || !msw_side_get(i, &sc)) {

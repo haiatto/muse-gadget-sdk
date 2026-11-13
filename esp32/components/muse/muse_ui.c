@@ -107,6 +107,9 @@ static lv_indev_t *s_indev;
 static lv_obj_t *s_tv;
 static bool s_swipe_enabled = true;
 static bool s_touch_talk_down;
+#if CONFIG_MUSE_VOICE_NOTE_TOGGLE
+static bool s_note_listening;   /* a toggled note is recording: keep its face up */
+#endif
 /* True while the face tile is the visible tile. Updated in the LVGL task;
  * read from any task (single word, benign if briefly stale). */
 static volatile bool s_face_active = true;
@@ -116,6 +119,9 @@ static void update_tileview_swipe(void)
 {
     if (!s_tv) return;
     bool enabled = s_swipe_enabled && !s_touch_talk_down;
+#if CONFIG_MUSE_VOICE_NOTE_TOGGLE
+    enabled = enabled && !s_note_listening;
+#endif
     if (enabled != lv_obj_has_flag(s_tv, LV_OBJ_FLAG_SCROLLABLE)) {
         lv_obj_set_flag(s_tv, LV_OBJ_FLAG_SCROLLABLE, enabled);
     }
@@ -183,6 +189,9 @@ static bool s_caption_shown;
 #endif
 static lv_obj_t *s_state_lbl;
 static lv_obj_t *s_name_lbl;    /* this gadget's own name, to tell it from the next one */
+static lv_obj_t *s_cv_lbl;      /* museStopWatch: "CV: ..." while voice.play's voice speaks */
+/* museStopWatch: the voice's name while voice.play's audio is heard (main/msw_play.c). */
+const char *msw_voice_credit(void) __attribute__((weak));
 static lv_obj_t *s_power_lbl;
 static lv_obj_t *s_caption_lbl;
 static lv_obj_t *s_reply_lbl;   /* full layout: the reply's page while answering */
@@ -1289,6 +1298,15 @@ static void build_screen(void)
      * these rows, so there's nowhere to put this without covering the face. */
     lv_obj_set_flag(s_name_lbl, LV_OBJ_FLAG_HIDDEN, s_small && !s_tall && s_h < 200);
 
+    /* museStopWatch: whose voice voice.play plays, dim near the bottom (the
+     * reply takes the top), on the round panel's chord there. */
+    s_cv_lbl = make_label(face, caption_font(), COLOR_DIM);
+    lv_obj_set_size(s_cv_lbl, 240, LV_SIZE_CONTENT);
+    lv_obj_set_style_text_align(s_cv_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(s_cv_lbl, LV_LABEL_LONG_MODE_DOTS);
+    lv_obj_align(s_cv_lbl, LV_ALIGN_BOTTOM_MID, 0, -40);
+    lv_obj_add_flag(s_cv_lbl, LV_OBJ_FLAG_HIDDEN);
+
     s_caption_lbl = make_label(face, font_pick(caption_font(), &lv_font_unscii_8), COLOR_CAPTION);
     if (s_small) {
         /* Two lines over the bottom of the face, on a dark band so they stay
@@ -1695,6 +1713,17 @@ static const char *idle_name(muse_wifi_state_t wifi)
 
 static void update_chrome(float now)
 {
+    if (s_cv_lbl) {
+        const char *cv = msw_voice_credit ? msw_voice_credit() : NULL;
+        if (cv) {
+            char t[64];
+            snprintf(t, sizeof(t), "CV: %s", cv);
+            if (strcmp(t, lv_label_get_text(s_cv_lbl)) != 0) {
+                lv_label_set_text(s_cv_lbl, t);
+            }
+        }
+        lv_obj_set_flag(s_cv_lbl, LV_OBJ_FLAG_HIDDEN, !cv);
+    }
     if (now < s_next_settings_tick) {
         return;
     }
@@ -2156,6 +2185,10 @@ static void frame_tick(lv_timer_t *timer)
             image_hide_locked();
             muse_ui_show_face();
         }
+#if CONFIG_MUSE_VOICE_NOTE_TOGGLE
+        s_note_listening = mode == MUSE_MODE_LISTENING;
+        update_tileview_swipe();
+#endif
         s_last_mode = mode;
     }
     if (update_sleep()) {
@@ -2210,9 +2243,10 @@ esp_err_t muse_ui_start(void)
     s_w = muse_board->width;
     s_h = muse_board->height;
     /* The full layout assumes room for the 466 px board's header and bottom
-     * captions. Short landscape panels (BOX-3) need the compact layout too,
-     * as does anything narrower than its fixed 256 px captions. */
-    bool short_landscape = s_w > s_h && s_h < 320;
+     * captions. Short landscape panels (BOX-3, and 480x320, where the full
+     * layout's status line would sit above the screen) need the compact
+     * layout too, as does anything narrower than its fixed 256 px captions. */
+    bool short_landscape = s_w > s_h && s_h <= 320;
     s_small = s_h < 200 || s_w < 200 || short_landscape || s_w < 300;
     s_tall = s_small && s_h >= s_w + 64;
     s_long = s_tall && s_h >= 3 * s_w;

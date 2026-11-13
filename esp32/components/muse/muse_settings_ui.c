@@ -1347,7 +1347,7 @@ static void build_sound_page(lv_obj_t *tile)
             /* museStopWatch: 50-300 % in steps of 10 */
             s_tts_sl = slider(list, "Voice level", 5, 30, msw_tts_level() / 10, &s_tts_val, on_tts_level);
             set_val(s_tts_val, "%d%%", msw_tts_level() / 10 * 10);
-            note(list, "本体の声（読み上げ）の大きさ。外で聞こえにくいときに上げます。大きくすると、割れないように"
+            note(list, "読み上げの声の大きさ。外で聞こえにくいときに上げます。大きくすると、割れないように"
                        "大きいところを抑えるので、音が少し平たくなります。");
         }
     }
