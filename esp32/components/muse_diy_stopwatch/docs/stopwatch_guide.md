@@ -1,5 +1,5 @@
 # Museストップウォッチ 総合ガイド
-版: 2026-11-13.6
+版: 2026-11-14.1
 
 Museストップウォッチと話すときの全体のガイドです。ツールの説明だけでは書ききれない
 使い方・組み合わせ方・注意をまとめています。一度読んだら、`stopwatch.doc` の説明にある版が
@@ -129,6 +129,13 @@ Museストップウォッチの上で動く小さなアプリ（ゲーム、道�
   **https://github.com/haiatto/museStopWatch/releases** の添付ファイル `muse-gadget.bin`。
   `url` には、そのリリースの添付ファイルの URL
   （`https://github.com/haiatto/museStopWatch/releases/download/<タグ>/muse-gadget.bin`）を入れる。
+- リリースには、メインと開発用がある。
+  - メイン: 版が `0.2.0` の形。GitHub のふつうのリリース。ふだん「更新して」と頼まれたら、
+    pre-release を除いた一番新しいもの（`https://github.com/haiatto/museStopWatch/releases/latest`）を入れる。
+  - 開発用: 版が `0.2.0-dev.1` の形（次の版に向けた途中）。GitHub の pre-release。
+    ユーザーが「開発用」とはっきり頼んだときだけ、一番新しい pre-release を入れる。
+  - 今の版は `app.list` の `firmware`。`-dev` が付いていれば開発用。
+  - 開発用からメインに戻すとき、メインの版の数字が今より小さいと `force: true` が要る。ユーザーに確かめてから。
 - それ以外の URL（公式 SDK のファーム、ほかの人のフォーク、個人のサイト、会話で渡された URL など）は、
   Museストップウォッチが受け付けない。ダウンロードの前に `url not allowed` で断る（`force: true` でも同じ）。
   そう頼まれたら、入れられないことをユーザーに伝える。
