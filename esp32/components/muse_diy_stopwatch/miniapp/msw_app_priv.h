@@ -177,6 +177,19 @@ void msw_api_call_exit_cb(void);
 /* Muse's reply text, from the chat session (weak there): handed to the
  * app's msw_on_muse_reply callback on its next tick. */
 void msw_app_muse_reply(const char *text);
+/* ---- Muse's commands to the app (msw_app_call.c) ---- */
+void msw_call_begin(void);                   /* msw_api_begin */
+void msw_call_end(void);                     /* msw_api_end: a call not taken ends */
+void msw_call_deliver(void);                 /* the app's task, display locked, between ticks */
+/* app.call: waits up to timeout_ms for the app. NULL and *reply (malloc'd)
+ * on success; else "not_running", "no_commands", "busy", "unknown_command"
+ * (*reply NULL), "not_taken" (no ticks: the app menu open, or the start
+ * screen), "timeout" (the app's callback did not return) or "out_of_memory". */
+struct cJSON;
+const char *msw_app_call(const char *name, const struct cJSON *args, int timeout_ms, char **reply);
+/* A text data file of an installed app's package (sdk/build.py's ".commands"):
+ * malloc'd, NUL-terminated; NULL with code "not_found" or "none". */
+char *msw_app_file_text(const char *id, const char *name, const char **code);
 bool msw_imu_probe(msw_imu_t *out);          /* >msw.imu: works with no app */
 void msw_imu_release(void);                  /* the app ended: sensor off */
 

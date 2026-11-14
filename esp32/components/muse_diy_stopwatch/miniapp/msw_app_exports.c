@@ -287,6 +287,14 @@ extern void msw_app_free(void);
 extern void msw_app_malloc(void);
 extern void msw_app_realloc(void);
 extern void msw_app_strdup(void);
+extern void msw_arg_bool(void);
+extern void msw_arg_float(void);
+extern void msw_arg_float_at(void);
+extern void msw_arg_has(void);
+extern void msw_arg_int(void);
+extern void msw_arg_int_at(void);
+extern void msw_arg_len(void);
+extern void msw_arg_str(void);
 extern void msw_avatar_define(void);
 extern void msw_avatar_hide(void);
 extern void msw_avatar_show(void);
@@ -334,6 +342,7 @@ extern void msw_nn_fc(void);
 extern void msw_nn_max_pool(void);
 extern void msw_on_button(void);
 extern void msw_on_exit(void);
+extern void msw_on_muse_call(void);
 extern void msw_on_muse_reply(void);
 extern void msw_on_pause(void);
 extern void msw_on_tick(void);
@@ -478,6 +487,15 @@ const struct esp_elfsym msw_app_symbols[] = {
     { "msw_bubble", (void *)&msw_bubble },
     { "msw_on_muse_reply", (void *)&msw_on_muse_reply },
     { "msw_muse_talk", (void *)&msw_muse_talk },
+    { "msw_on_muse_call", (void *)&msw_on_muse_call },
+    { "msw_arg_has", (void *)&msw_arg_has },
+    { "msw_arg_int", (void *)&msw_arg_int },
+    { "msw_arg_float", (void *)&msw_arg_float },
+    { "msw_arg_bool", (void *)&msw_arg_bool },
+    { "msw_arg_str", (void *)&msw_arg_str },
+    { "msw_arg_len", (void *)&msw_arg_len },
+    { "msw_arg_int_at", (void *)&msw_arg_int_at },
+    { "msw_arg_float_at", (void *)&msw_arg_float_at },
     { "msw_avatar_define", (void *)&msw_avatar_define },
     { "malloc", (void *)&msw_app_malloc },
     { "calloc", (void *)&msw_app_calloc },
@@ -797,4 +815,4 @@ const struct esp_elfsym msw_app_symbols[] = {
     { "lv_timer_resume", (void *)&lv_timer_resume },
     ESP_ELFSYM_END
 };
-const int msw_app_symbol_count = 394;
+const int msw_app_symbol_count = 403;

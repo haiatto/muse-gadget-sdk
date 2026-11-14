@@ -9,6 +9,8 @@
  *   app.remove  delete an app by id         app.log    the app log
  *   app.source  the app's files kept in its package (sdk/build.py adds them)
  *   app.screenshot  the screen as a JPEG, base64 (like camera.capture)
+ *   app.commands    what an app takes from app.call (app.json "commands")
+ *   app.call    a command to the running app (msw_on_muse_call), msw_app_call.c
  *   app.avatar_doc, app.avatar_list, app.avatar_preview, app.avatar_use
  *               the face screen's avatar (avatar_guide.md, msw_avatar.c)
  *   app.install is async: main/app.c fetches the file from the VM and hands
@@ -283,6 +285,81 @@ static cJSON *screenshot(const cJSON *params)
     return r;
 }
 
+/* app.commands: what an app takes from app.call (app.json "commands", kept in
+ * its package as ".commands" by sdk/build.py). The running app by default. */
+static cJSON *commands(const cJSON *params)
+{
+    const char *running = msw_app_running();
+    const char *id = str(params, "id");
+    id = id ? id : running;
+    if (!id) {
+        return fail("not_running", "no app is running: give id");
+    }
+    const char *code = NULL;
+    char *text = msw_app_file_text(id, ".commands", &code);
+    if (!text && code && strcmp(code, "none")) {
+        return fail(code, !strcmp(code, "not_found") ? "no app with that id" : "out of memory");
+    }
+    cJSON *list = text ? cJSON_Parse(text) : NULL;
+    free(text);
+    cJSON *payload;
+    cJSON *r = ok_payload(&payload);
+    cJSON_AddStringToObject(payload, "id", id);
+    cJSON_AddBoolToObject(payload, "running", running && !strcmp(running, id));
+    cJSON_AddItemToObject(payload, "commands", cJSON_IsArray(list) ? list : cJSON_CreateArray());
+    if (!cJSON_IsArray(list)) {
+        cJSON_Delete(list);
+        cJSON_AddStringToObject(payload, "note", "this app takes no commands (its app.json has no \"commands\")");
+    }
+    return r;
+}
+
+/* app.call: a command to the running app (msw_on_muse_call), its reply. */
+static cJSON *call(const cJSON *params)
+{
+    const char *name = str(params, "name");
+    if (!name) {
+        return fail("missing_param", "name is required (app.commands lists them)");
+    }
+    const cJSON *args = params ? cJSON_GetObjectItemCaseSensitive(params, "args") : NULL;
+    if (args && !cJSON_IsObject(args) && !cJSON_IsNull(args)) {
+        return fail("bad_param", "args is an object of the command's arguments, {\"ch\": 3}");
+    }
+    char *reply = NULL;
+    const char *err = msw_app_call(name, args, 3000, &reply);
+    if (err) {
+        const char *running = msw_app_running();
+        char msg[200];
+        if (!strcmp(err, "not_running")) {
+            snprintf(msg, sizeof(msg), "no app is running (app.run starts one)");
+        } else if (!strcmp(err, "no_commands")) {
+            snprintf(msg, sizeof(msg), "%s takes no commands (it has not called msw_on_muse_call, or waits on its start screen)",
+                     running ? running : "the app");
+        } else if (!strcmp(err, "unknown_command")) {
+            snprintf(msg, sizeof(msg), "%s does not know \"%.40s\" (app.commands lists what it takes)",
+                     running ? running : "the app", name);
+        } else if (!strcmp(err, "not_taken")) {
+            snprintf(msg, sizeof(msg), "the app did not take it in 3 s: it is paused (the app menu is open) "
+                                       "or a tick of it has not returned (app.log)");
+        } else if (!strcmp(err, "timeout")) {
+            snprintf(msg, sizeof(msg), "the app's command callback did not return in 3 s (app.log)");
+        } else if (!strcmp(err, "busy")) {
+            snprintf(msg, sizeof(msg), "the app still runs an earlier command: try again");
+        } else {
+            snprintf(msg, sizeof(msg), "out of memory");
+        }
+        return fail(err, msg);
+    }
+    cJSON *payload;
+    cJSON *r = ok_payload(&payload);
+    const char *running = msw_app_running();
+    cJSON_AddStringToObject(payload, "app", running ? running : "");
+    cJSON_AddStringToObject(payload, "name", name);
+    cJSON_AddStringToObject(payload, "reply", reply ? reply : "");
+    free(reply);
+    return r;
+}
+
 /* NULL: not an app.* command this handles (app.install is main/app.c's). */
 cJSON *msw_app_command(const char *command, const cJSON *params)
 {
@@ -446,6 +523,12 @@ cJSON *msw_app_command(const char *command, const cJSON *params)
         cJSON *r = ok_payload(&payload);
         cJSON_AddStringToObject(payload, "current", msw_avatar_current(NULL, 0, NULL));
         return r;
+    }
+    if (!strcmp(c, "commands")) {
+        return commands(params);
+    }
+    if (!strcmp(c, "call")) {
+        return call(params);
     }
     if (!strcmp(c, "log")) {
         char *buf = heap_caps_malloc(8192, MALLOC_CAP_SPIRAM);

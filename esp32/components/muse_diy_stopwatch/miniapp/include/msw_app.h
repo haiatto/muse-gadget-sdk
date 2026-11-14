@@ -53,7 +53,8 @@ extern "C" {
 #endif
 
 #define MSW_API_VERSION 4   /* 2: msw_app_data (2026-11-11); 3: msw_pin_read, the PORT.A start screen (2026-11-13);
-                               4: msw_uart_*, msw_jpeg_*, msw_nn_* (2026-11-14) */
+                               4: msw_uart_*, msw_jpeg_*, msw_nn_* (2026-11-14);
+                               5: msw_on_muse_call, msw_arg_*, app.json "commands" (2026-11-14) */
 #define MSW_SCREEN_W 466
 #define MSW_SCREEN_H 466
 
@@ -403,6 +404,33 @@ void msw_on_muse_reply(msw_reply_cb cb, void *user);
  * (as holding the talk button does outside apps), false ends it and sends
  * it; the reply comes to msw_on_muse_reply. Show the user what to press. */
 void msw_muse_talk(bool down);
+
+/* Commands from Muse (its app.call) to the running app. The app lists them
+ * in app.json "commands" (name, about, args: what each takes, in words), so
+ * Muse can read them (app.commands) before and while the app runs.
+ *
+ * The callback runs on the app's task between ticks, as the others do, with
+ * the command's name and its arguments; it returns the reply text for Muse
+ * (copied at once, up to 2000 bytes: "ok", "ch3=90", a sentence), or NULL
+ * for a name it does not know. Muse waits up to 3 s for it; while the app
+ * menu is open or a tick does not return, the call times out.
+ *
+ * Arguments come from Muse as JSON; the msw_arg_* functions read them, so
+ * the app sees no JSON. A key that is missing or of another type gives def.
+ * Strings stay valid only during the callback. */
+typedef struct msw_args msw_args_t;
+typedef const char *(*msw_call_cb)(const char *name, const msw_args_t *args, void *user);
+void msw_on_muse_call(msw_call_cb cb, void *user);
+bool msw_arg_has(const msw_args_t *args, const char *key);
+int msw_arg_int(const msw_args_t *args, const char *key, int def);          /* 2.7 -> 2 */
+float msw_arg_float(const msw_args_t *args, const char *key, float def);
+bool msw_arg_bool(const msw_args_t *args, const char *key, bool def);
+const char *msw_arg_str(const msw_args_t *args, const char *key, const char *def);
+/* Arrays ("angles": [90, 45, 0]): the length (-1 if key is not an array),
+ * and item i. */
+int msw_arg_len(const msw_args_t *args, const char *key);
+int msw_arg_int_at(const msw_args_t *args, const char *key, int i, int def);
+float msw_arg_float_at(const msw_args_t *args, const char *key, int i, float def);
 
 /* ---- avatars (app.json "kind": "avatar") --------------------------------- */
 

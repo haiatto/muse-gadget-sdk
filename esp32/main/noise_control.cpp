@@ -1720,6 +1720,29 @@ static char *build_register_json(void) {
                     nullptr, shot_opt);
         cJSON_AddNumberToObject(
             cJSON_GetObjectItem(commands, "app.screenshot"), "timeout_ms", 20000);
+        /* museStopWatch: commands to the running app (msw_app_call.c, 2026-11-14). */
+        cJSON *cmds_opt = cJSON_CreateObject();
+        cJSON_AddItemToObject(cmds_opt, "id", string_param("The app's id (app.list); default: the running app."));
+        add_command(commands, "app.commands",
+                    "The commands a mini app takes from app.call, from its app.json \"commands\": "
+                    "each one's name, about (what it does) and args (what each argument is). "
+                    "Works for an installed app that is not running too. Empty when the app takes none.",
+                    nullptr, cmds_opt);
+        cJSON *call_req = cJSON_CreateObject();
+        cJSON_AddItemToObject(call_req, "name", string_param("The command's name (app.commands)."));
+        cJSON *call_opt = cJSON_CreateObject();
+        cJSON *call_args = cJSON_CreateObject();
+        cJSON_AddStringToObject(call_args, "type", "object");
+        cJSON_AddStringToObject(call_args, "description",
+                                "The command's arguments as app.commands describes them, e.g. {\"ch\": 3, \"angle\": 90}.");
+        cJSON_AddItemToObject(call_opt, "args", call_args);
+        add_command(commands, "app.call",
+                    "Give a command to the running mini app and get its reply (text the app writes). "
+                    "Read app.commands first for the names and arguments. The app answers between its "
+                    "frames, within 3 s. To follow what an app does over time, call a command that "
+                    "reports its state again as often as needed. Errors: not_running, no_commands, "
+                    "unknown_command, not_taken (the app is paused: its menu is open), timeout, busy.",
+                    call_req, call_opt);
         cJSON *offset3 = cJSON_Duplicate(offset, true);
         add_command(commands, "app.avatar_doc",
                     "READ THIS FIRST when the user asks you to change your look on the watch "

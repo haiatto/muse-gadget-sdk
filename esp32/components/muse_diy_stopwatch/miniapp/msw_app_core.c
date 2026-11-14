@@ -42,9 +42,12 @@
 #include "mbedtls/base64.h"
 #include "miniz.h"   /* the ROM's tinfl */
 
+#include "cJSON.h"
 #include "muse_board.h"
 #include "muse_state.h"
 #include "msw_app_priv.h"
+
+cJSON *msw_app_command(const char *command, const cJSON *params);   /* msw_app_cmd.c */
 
 static const char *TAG = "msw_app";
 
@@ -546,6 +549,50 @@ char *msw_app_source(const char *id, const char **code)
         return NULL;
     }
     msw_app_service(read_source, &q);
+    *code = q.code;
+    return q.text;
+}
+
+typedef struct {
+    const char *id, *name;
+    char *text;
+    const char *code;
+} file_req_t;
+
+static void read_file_text(void *arg)
+{
+    file_req_t *q = arg;
+    size_t n = 0;
+    const uint8_t *pkg = msw_pkgs_find(q->id, false, &n);
+    pkg_parts_t parts;
+    q->code = "not_found";
+    if (!pkg || !pkg_parts(pkg, n, &parts)) {
+        return;
+    }
+    q->code = "none";
+    for (uint32_t i = 0; i < parts.nfiles; i++) {
+        msw_pkg_file_t f;
+        memcpy(&f, &parts.files[i], sizeof(f));
+        if (!strcmp(f.name, q->name)) {
+            q->text = heap_caps_malloc(f.size + 1, MALLOC_CAP_SPIRAM);
+            q->code = q->text ? NULL : "out_of_memory";
+            if (q->text) {
+                memcpy(q->text, pkg + f.off, f.size);
+                q->text[f.size] = '\0';
+            }
+            return;
+        }
+    }
+}
+
+char *msw_app_file_text(const char *id, const char *name, const char **code)
+{
+    file_req_t q = { .id = id, .name = name };
+    if (!valid_id(id)) {
+        *code = "not_found";
+        return NULL;
+    }
+    msw_app_service(read_file_text, &q);
     *code = q.code;
     return q.text;
 }
@@ -1264,6 +1311,9 @@ static void app_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
+        busy("a call from Muse (msw_on_muse_call)");
+        msw_call_deliver();
+        busy(NULL);
         int64_t t0 = esp_timer_get_time();
         busy("a tick");
         msw_api_tick(ms - last_ms);
@@ -1586,6 +1636,19 @@ static bool console(const char *line)
         }
     } else if (!strcmp(cmd, "list")) {
         print_list();
+    } else if (!strncmp(cmd, "tool ", 5)) {
+        /* Muse's app.* command over serial, to test it: >msw.app.tool app.call {"name":"read"} */
+        char name[32];
+        const char *sp = strchr(cmd + 5, ' ');
+        size_t len = sp ? (size_t)(sp - (cmd + 5)) : strlen(cmd + 5);
+        snprintf(name, sizeof(name), "%.*s", (int)(len < sizeof(name) ? len : sizeof(name) - 1), cmd + 5);
+        cJSON *params = sp ? cJSON_Parse(sp + 1) : NULL;
+        cJSON *res = msw_app_command(name, params);
+        char *out = res ? cJSON_PrintUnformatted(res) : NULL;
+        printf("@msw.app.tool %s\n", out ? out : "unknown command");
+        free(out);
+        cJSON_Delete(res);
+        cJSON_Delete(params);
     } else if (!strncmp(cmd, "run ", 4)) {
         bool ok = msw_app_start(cmd + 4, &code, msg, sizeof(msg));
         printf("@msw.app.run %s\n", ok ? "ok" : msg);

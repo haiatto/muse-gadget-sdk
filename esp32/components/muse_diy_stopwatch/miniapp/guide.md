@@ -70,6 +70,9 @@ port: PORT.A を使うアプリ（msw_port_power・msw_i2c_begin・msw_pin_read�
 `connect` に PORT.A につなぐもの（1 行、120 バイトまで）、`about` にそれでアプリがすること（240 バイトまで）。
 例 `"port": {"connect": "M5Stack の Dual Button ユニット", "about": "2つのボタンで、画面のキャラを左右に動かします"}`。
 ないと `sdk/build.py` が止まる。アプリが始まる前に、画面いっぱいに両方が出る。
+commands: `app.call` で受ける指示（msw_on_muse_call を使うアプリだけ）。`name`（a-z 0-9 _、31 文字まで）、
+`about`（すること）、`args`（引数の名前と、それが何かの説明。なければ省く）。全体で 4 KB まで。
+例 `"commands": [{"name": "servo", "about": "サーボを動かす", "args": {"ch": "0〜7", "angle": "0〜180 の角度"}}]`。
 
 ## アプリの形
 
@@ -173,6 +176,15 @@ API の全部は `app.api`（msw_app.h）で読める。要約:
   Muse を使うかはアプリが決める。アプリ中、青ボタンはアプリのもので「話す」ではない。
   ユーザーが Muse と話せるようにするなら、押したら msw_muse_talk(true)、離したら
   msw_muse_talk(false) を呼ぶ操作（青ボタンか画面のボタン）を用意し、それが何かを画面で示す。
+- **あなたからの指示**（`app.call`）: 動いているアプリに、名前と引数を送って返事の文字を受け取る。
+  アプリは `msw_on_muse_call(cb, user)` で受ける。cb(name, args, user) はティックの間にアプリのタスクで
+  呼ばれ、返事の文字（2000 バイトまで、すぐに写される）を返す。知らない名前には NULL（`unknown_command` になる）。
+  引数はあなたが JSON で送り、アプリは msw_arg_int・msw_arg_float・msw_arg_bool・msw_arg_str
+  （なければ既定値）、配列は msw_arg_len と msw_arg_int_at・msw_arg_float_at で読む。アプリから JSON は見えない。
+  指示の一覧は app.json の `commands` に書く（下の「app.json」）。`app.commands`（id）で、動いていないアプリのも読める。
+  3 秒のうちに返事がないと `timeout`、アプリのメニューが開いていると `not_taken`。cb は短く（ティックと同じ）。
+  アプリの今の様子を続けて知りたいときは、様子を返す指示を作り、それを何度も呼ぶ。アプリからあなたに知らせる道はない。
+  例は apps/sensors（`read`、`scan`）。
 
 ## うまくいく作り方
 

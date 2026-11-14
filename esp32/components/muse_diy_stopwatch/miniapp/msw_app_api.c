@@ -488,6 +488,7 @@ void msw_api_begin(const char *id, uintptr_t code_lo, uintptr_t code_hi, uintptr
     s_reply = NULL;
     s_pause = NULL;
     s_menu_own = false;
+    msw_call_begin();
     s_prev_screen = lv_screen_active();
     s_screen = lv_obj_create(NULL);
     lv_obj_remove_style_all(s_screen);
@@ -514,6 +515,7 @@ void msw_api_end(void)
     s_tick = NULL;
     s_button = NULL;
     s_reply = NULL;
+    msw_call_end();
     free_all_blocks();
     portENTER_CRITICAL(&s_reply_mux);
     char *old = s_reply_text;
